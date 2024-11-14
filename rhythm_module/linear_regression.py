@@ -53,6 +53,51 @@ def genes_polar_parameters(res, rel_ampl=False):
     return res_pol
 
 
+def polar_genes_pandas(res, rel_ampl=False):
+    """
+    This function takes a panda df of size Ngx4
+    where teh first column is the gene name, and
+    teh following 3 are a,b,m
+    """
+    N_g, _ = res.shape
+    res_pol = res.copy()
+
+    if res.columns.shape[0] == 4:
+        res_pol.columns = ["amp", "phase", "mean", "disp"]
+    else:
+        res_pol.columns = ["amp", "phase", "mean"]
+
+    for j in range(N_g):
+        amp, phase, mu = polar_parameters(res.iloc[j, 0:3].values, rel_ampl=rel_ampl)
+        res_pol.iloc[j, 0] = amp
+        res_pol.iloc[j, 1] = phase
+        res_pol.iloc[j, 2] = mu
+
+    return res_pol
+
+
+def cartesian_genes_pandas(res, rel_ampl=False):
+    """
+    This function takes a panda df of size Ngx4
+    where teh first column is the gene name, and
+    teh following 3 are a,b,m
+    """
+    N_g, _ = res.shape
+    res_pol = res.copy()
+
+    res_pol.columns = ["a_g", "b_g", "m_g", "disp"]
+
+    for j in range(N_g):
+        amp, phase, mu = cartesian_parameters(
+            res.iloc[j, 0:3].values, rel_ampl=rel_ampl
+        )
+        res_pol.iloc[j, 0] = amp
+        res_pol.iloc[j, 1] = phase
+        res_pol.iloc[j, 2] = mu
+
+    return res_pol
+
+
 # Inverse of the previous function
 def cartesian_parameters(par, rel_ampl=False):
     """
@@ -189,6 +234,11 @@ def harmonic_regression_loop(E_ygt, t_u, omega=1, eval_fit="bic", return_bic=Fal
     - omega: frequency
     - eval_fit: 'bic' or 'pvalue'
     - return_bic: if True, the function returns the BIC/Pvalue of the harmonic regression
+
+    Output:
+    - res: np.array of shape (N_ct, N_g, 3) with the parameters of the harmonic regression
+        where the last dimension is a, b, mu
+    - vals: np.array of shape (N_ct, N_g) with the BIC/Pvalue of the harmonic
     """
     N_y, N_g, N_t = E_ygt.shape
     res = np.zeros((N_y, N_g, 3))

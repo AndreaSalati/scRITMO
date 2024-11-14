@@ -46,7 +46,7 @@ def pseudobulk_new(
 
         for j, gr2 in enumerate(bb):
 
-            counts = adata[gr2, :].layers[pseudobulk_layer].sum(axis=0)
+            counts = adata[gr2, :].layers[pseudobulk_layer].sum(axis=0).reshape(1, -1)
             xx = sc.AnnData(
                 X=counts,
                 var=adata.var.index.values,
@@ -100,12 +100,19 @@ def change_shape(PB, groupby_obs_list, n_groups=1):
     Where : NZ is the number of unique categories in the first element of groupby_obs_list
             NG is the number of genes
             NS is the number of samples (second element in groupby_obs_list)
+
     Parameters:
     PB : AnnData pseudobulked object
     groupby_obs_list : list of strings of 2 elements
         The first element is the observation key to group by
         The second element is the observation key to group by
     n_groups : int (default=1)
+
+    Returns:
+    n_ygt : 3D numpy array
+        The pseudobulk data, with shape (NZ, NG, NS*n)
+        In case there are no cells for a given combination of z_obs and sample_obs
+        the data is padded with np.nan
     """
     # Create the 3D array
     _, NG = PB.shape
@@ -117,7 +124,8 @@ def change_shape(PB, groupby_obs_list, n_groups=1):
     sample_u = np.unique(PB.obs[sample_obs])
     NS = sample_u.shape[0]
 
-    n_ygt = np.zeros((NZ, NG, NS * n_groups))
+    # n_ygt = np.zeros((NZ, NG, NS * n_groups))
+    n_ygt = np.full((NZ, NG, NS * n_groups), np.nan)
 
     for i, ct in enumerate(z_u):
         cluster_indices = PB.obs[z_obs] == ct
@@ -132,7 +140,7 @@ def change_shape(PB, groupby_obs_list, n_groups=1):
             else:
                 # The combination of z_obs and sample_obs does not exist, so keep zeros
                 print(
-                    f"Missing data for cluster {ct} and sample {sample}, padding with zeros."
+                    f"Missing data for cluster {ct} and sample {sample}, padding with np.nan."
                 )
 
     return n_ygt
@@ -141,6 +149,7 @@ def change_shape(PB, groupby_obs_list, n_groups=1):
 def normalize_log_PB(n_ygt, eps=None, base=2.0):
     """
     This function normalizes the pseudobulk data and applies a log2 transformation
+    To be run after the change_shape function
     Parameters:
     n_ygt : 3D numpy array
         The pseudobulk data, with shape (NZ, NG, NS)
@@ -151,7 +160,7 @@ def normalize_log_PB(n_ygt, eps=None, base=2.0):
     # number of counts per celltype and sample
     N_yt = n_ygt.sum(axis=1)
     if eps is None:
-        cc = np.median(N_yt)
+        cc = np.nanmedian(N_yt)
         eps = 1 / cc
     f_ygt = n_ygt / N_yt[:, None, :]
     # replace nan values with 0

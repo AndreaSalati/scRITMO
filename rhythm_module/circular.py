@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.stats import circmean, circstd, circvar
 
 
 def circular_mean(phis, P=None):
@@ -9,10 +10,6 @@ def circular_mean(phis, P=None):
 
     if P is None:
         P = np.ones(len(phis)) / len(phis)
-
-    # if phis is None:
-    #     phis = np.linspace(0, 2 * np.pi, P.shape[0])
-
     # take complex arg of sum
     mu = np.angle(np.sum(np.exp(1j * phis) * P))
 
@@ -193,26 +190,22 @@ def circular_deviation(x, y, period=24):
     y: phase array
     period: period of the circular variable
     """
-    if x.ndim != 1 or y.ndim != 1:
+    if x.ndim > 1 or y.ndim > 1:
         print(
-            "WARNING: Both x and y must be 1D arrays, output of the function will be wrong"
+            "WARNING: Both x and y must be 1D arrays, or output of the function will be wrong"
         )
-    v1 = np.abs(x - y) % period
+    v1 = np.abs(x.squeeze() - y.squeeze()) % period
     v2 = period - v1
 
     return np.minimum(v1, v2)
 
 
-def circular_median_absolute_deviation(x, y, period=24):
+def circular_median_absolute_deviation(x, y, period=24.0):
     """
     It computes the circular mean absolute deviation between two vectors x and y
     PASS SQUEEZED ARRAYS
     """
     # throw error if x and y are not squeezed
-    if x.ndim != 1 or y.ndim != 1:
-        print(
-            "WARNING: Both x and y must be 1D arrays, output of the function will be wrong"
-        )
 
     v = circular_deviation(x, y, period)
     return np.median(v)
@@ -242,3 +235,27 @@ def circular_correlation(x, y):
     DOUBLE CHECK THIS FUNCTION
     """
     # n = len(x)
+
+
+def circular_dispersion_samples(phi, samples):
+    """
+    This function computes some statistics after the inference
+    It takes the cricular mean of all cells beloning to the same
+    sample and computes the circular mean and deviation of the sample mean
+    """
+    samples_u = np.unique(samples)
+    circ_mean = np.zeros(samples_u.shape)
+    mad = np.zeros(samples_u.shape)
+    mead = np.zeros(samples_u.shape)
+
+    for i, s in enumerate(samples_u):
+        idx = samples == s
+        circ_mean[i] = circmean(phi[idx])
+        mead[i] = circular_mean_absolute_deviation(
+            phi[idx], circ_mean[i], period=2 * np.pi
+        )
+        mad[i] = circular_median_absolute_deviation(
+            phi[idx], circ_mean[i], period=2 * np.pi
+        )
+
+    return circ_mean, mad, mead

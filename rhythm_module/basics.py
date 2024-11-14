@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 
 
 def LL(y_true, y_pred):
@@ -79,3 +80,79 @@ def vectorized_subsample_matrix_units(matrix, p):
         subsampled_matrix += mask * random_array[k - 1]
 
     return subsampled_matrix
+
+
+def dict2df(d, index=None):
+    """
+    converts the dictionary d to a pandas dataframe.
+    Dictionary d is the output of inference functions in numpyro_models_handles.py
+    """
+
+    for k in d.keys():
+        d[k] = np.array(d[k]).squeeze()
+
+    df = pd.DataFrame(d)
+
+    if index is not None:
+        df.index = index
+    return df
+
+
+def df2dict(df, return_index=False):
+    """
+    converts a pandas dataframe to a dictionary.
+    """
+
+    index = df.index.values
+    d = df.to_dict(orient="list")
+
+    for k in d.keys():
+        d[k] = np.array(d[k])[None, :]
+
+    if return_index:
+        return d, index
+    else:
+        return d
+
+
+def fold_change(log_amp, base=np.e):
+    """
+    convert log-amplitude to fold change
+    """
+    return base ** (2 * log_amp)
+
+
+ccg = np.array(
+    [
+        "Arntl",
+        "Npas2",
+        "Cry1",
+        "Cry2",
+        "Per1",
+        "Per2",
+        "Nr1d1",
+        "Nr1d2",
+        "Tef",
+        "Dbp",
+        "Ciart",
+        "Per3",
+        "Bmal1",
+    ]
+)
+
+w = 2 * np.pi / 24
+rh = w**-1
+
+
+def mean_disp_to_np(mean, dispersion):
+    """
+    Convert mean and dispersion to n and p parameters of the negative binomial distribution
+    WARNING: This works with the scipy parameterization of the negative binomial distribution
+        such param. can vary between packages, BE CAREFUL
+    Input:
+    mean: the mean of the negative binomial distribution
+    dispersion: the dispersion of the negative binomial distribution
+    """
+    p = mean / (mean + dispersion * mean**2)
+    n = 1 / dispersion
+    return n, p

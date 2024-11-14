@@ -8,7 +8,9 @@ from .RITMO import *
 from .numpyro_models import *
 from .posterior import *
 from .numpyro_models_handles import *
+from .simulations import *
 
+from .pyCHIRAL.pyCHIRAL.chiral import CHIRAL
 
 # try:
 #     from .numpyro_models import *
