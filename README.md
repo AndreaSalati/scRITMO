@@ -1,8 +1,10 @@
 # scRITMO
-Package for single cell rhythmicity analysis, at both the single cell and Pseudobulk Level.  
+A suite of useful functions for single cell analysis, pseudobulk and rhythic analysis.  
   
-This package leverages the Bayesian Inference framework Numpyro to assign latent circadian/cell-cycle phases to single cells and finds their posterior distributions in different ways.  
-  
+All probabilistic models based on jax, are not included yet in the package, but the scripts are in the repo.  
+
+Install the package with" pip install .
+
 
 
 
