@@ -3,6 +3,9 @@ import numpyro
 import jax
 import jax.numpy as jnp
 from numpyro import distributions as dist
+from numpyro import handlers
+from numpyro.infer.reparam import Reparam
+from numpyro.infer.reparam import CircularReparam
 
 
 def model_MLE_NB(y, **kwargs):
@@ -243,6 +246,9 @@ def model_SVI(y, **kwargs):
 
     counts = kwargs.get("counts", None)
     mp = kwargs.get("mp", None)
+    # phase_mode = kwargs.get("phase_mode", "param")
+
+    Nc, Ng = y.shape
 
     omega = 1
     disp = numpyro.param("disp", 0.1, constraint=dist.constraints.positive)
@@ -251,10 +257,12 @@ def model_SVI(y, **kwargs):
     b_g = numpyro.sample("b_g", dist.Normal(mp["b_g"], mp["std_ab"]))
     m_g = numpyro.sample("m_g", dist.Normal(mp["m_g"], mp["std_m"]))
 
-    phi_c = numpyro.param("phi_c", mp["phi_c"])
+    phi_xy = numpyro.sample("phi_xy", dist.Normal(np.zeros((Nc, 2)), 1.0))
+    cos_sin = phi_xy / jnp.linalg.norm(phi_xy, axis=1)[:, None]
 
     # define the model
-    E = a_g * jnp.cos(omega * phi_c) + b_g * jnp.sin(omega * phi_c) + m_g
+    # E = a_g * jnp.cos(omega * cos_sin[:, 0]) + b_g * jnp.sin(omega * cos_sin[:, 1]) + m_g
+    E = a_g * cos_sin[:, 0][:, jnp.newaxis] + b_g * cos_sin[:, 1][:, jnp.newaxis] + m_g
     E = jnp.exp(E) * counts
 
     conc = 1 / disp
@@ -263,12 +271,13 @@ def model_SVI(y, **kwargs):
     numpyro.sample("obs", dist.NegativeBinomial2(E, conc), obs=y)
 
 
-def guide_MAP(y, **kwargs):
+def guide_SVI(y, **kwargs):
 
     Nc = y.shape[0]
     Ng = y.shape[1]
 
     mp = kwargs.get("mp", None)
+    # phase_mode = kwargs.get("phase_mode", "param")
 
     a_g_loc = numpyro.param("a_g_loc", mp["a_g"])
     b_g_loc = numpyro.param("b_g_loc", mp["b_g"])
@@ -284,6 +293,12 @@ def guide_MAP(y, **kwargs):
     m_g_scale = numpyro.param(
         "m_g_scale", np.ones((1, Ng)) * 0.5, constraint=dist.constraints.positive
     )
+
+    phi_xy_loc = numpyro.param("phi_xy_loc", np.zeros((Nc, 2)))
+    phi_xy_scale = numpyro.param(
+        "phi_xy_scale", np.ones((Nc, 2)), constraint=dist.constraints.positive
+    )
+    phi_xy = numpyro.sample("phi_xy", dist.Normal(phi_xy_loc, phi_xy_scale))
 
     # hard assignment by using Delta distributions
     a_g = numpyro.sample("a_g", dist.Normal(a_g_loc, a_g_scale))

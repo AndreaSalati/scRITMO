@@ -79,19 +79,46 @@ def angle_deviation(angle, c_mean):
     return adjusted_diff
 
 
-def optimal_shift(p, p0, n_s=200, return_mad=True):
+def circular_deviation2(x, y, period=2 * np.pi):
+    """
+    Function called by optimal_shift
+    Inputs:
+    x: phase array
+    y: phase array
+    period: period of the circular variable
+    """
+    x, y = x % period, y % period
+    v1 = np.abs(x - y)
+    v2 = (period - v1) % period
+
+    return np.minimum(v1, v2)
+
+
+def optimal_shift(p, p0, n_s=200):
     """
     Aligns two sequences defined on the unit circle, taking care of the periodicity
     and the flipping symmetry of the circle.
     It uses the median absolute deviation (MAD) as a measure of the distance between the two sequences.
+
+    Parameters:
+    p: phase array to adjust
+    p0: phase array (reference)
+    n_s: number of shifts to consider
+
+    Returns:
+    phi_aligned: the aligned phase array
+    best_mad: the MAD of the best alignment
     """
-    n_c = p.shape[0]
+    Nc = p.shape[0]
     shifts = np.linspace(0, 2 * np.pi, n_s)
     # creating a matrix of all possible shifts
-    theta_cs = (p.reshape(n_c, 1) - shifts.reshape(1, n_s)) % (2 * np.pi)
-    theta_cs_neg = (-p.reshape(n_c, 1) - shifts.reshape(1, n_s)) % (2 * np.pi)
-    delta_cs = np.abs(theta_cs - p0.reshape(n_c, 1)) % (2 * np.pi)
-    delta_cs_neg = np.abs(theta_cs_neg - p0.reshape(n_c, 1)) % (2 * np.pi)
+    theta_cs = (p.reshape(Nc, 1) - shifts.reshape(1, n_s)) % (2 * np.pi)
+    theta_cs_neg = (-p.reshape(Nc, 1) - shifts.reshape(1, n_s)) % (2 * np.pi)
+
+    # for each shift, computing the circular deviation, using apply_along_axis
+    delta_cs = circular_deviation2(p0[:, None], theta_cs)
+    delta_cs_neg = circular_deviation2(p0[:, None], theta_cs_neg)
+
     # computing the median absolute deviation for all shifts
     v = np.median(delta_cs, axis=0)
     v_neg = np.median(delta_cs_neg, axis=0)
@@ -99,43 +126,16 @@ def optimal_shift(p, p0, n_s=200, return_mad=True):
     best_shift_ind = np.argmin(v)
     best_shift_ind_neg = np.argmin(v_neg)
     mad, mad_neg = v[best_shift_ind], v_neg[best_shift_ind_neg]
+
     # selecting which direction is the best
-    best_ind = best_shift_ind if mad < mad_neg else best_shift_ind_neg
-
-    if return_mad:
-        return theta_cs[:, best_ind], mad  # , shifts[best_ind]
+    if mad < mad_neg:
+        phi_aligned = theta_cs[:, best_shift_ind]
+        best_mad = mad
     else:
-        return theta_cs[:, best_ind]
+        phi_aligned = theta_cs_neg[:, best_shift_ind_neg]
+        best_mad = mad_neg
 
-
-# def optimal_shift(p, p0, n_s=200, return_mad=True):
-#     """
-#     Aligns two sequences defined on the unit circle, taking care of the periodicity
-#     and the flipping symmetry of the circle.
-#     It uses the median absolute deviation (MAD) as a measure of the distance between the two sequences.
-#     """
-#     n_c = p.shape[0]
-#     shifts = np.linspace(0, 2 * np.pi, n_s)
-#     theta_cs = (p.reshape(n_c, 1) - shifts.reshape(1, n_s)) % (2 * np.pi)
-#     theta_cs_neg = (-p.reshape(n_c, 1) - shifts.reshape(1, n_s)) % (2 * np.pi)
-#     delta_cs = np.abs(theta_cs - p0.reshape(n_c, 1)) % (2 * np.pi)
-#     delta_cs_neg = np.abs(theta_cs_neg - p0.reshape(n_c, 1)) % (2 * np.pi)
-#     v = np.median(delta_cs, axis=0)
-#     v_neg = np.median(delta_cs_neg, axis=0)
-#     best_shift_ind = np.argmin(v)
-#     best_shift_ind_neg = np.argmin(v_neg)
-#     mad, mad_neg = v[best_shift_ind], v_neg[best_shift_ind_neg]
-#     if v[best_shift_ind] < v_neg[best_shift_ind_neg]:
-#         if return_mad:
-#             return theta_cs[:, best_shift_ind], mad
-#         else:
-#             return theta_cs[:, best_shift_ind]
-
-#     else:
-#         if return_mad:
-#             return theta_cs_neg[:, best_shift_ind_neg], mad_neg
-#         else:
-#             return theta_cs_neg[:, best_shift_ind_neg]
+    return phi_aligned, best_mad
 
 
 def phi2category(phi, n_tmp=4):
@@ -194,7 +194,8 @@ def circular_deviation(x, y, period=24):
         print(
             "WARNING: Both x and y must be 1D arrays, or output of the function will be wrong"
         )
-    v1 = np.abs(x.squeeze() - y.squeeze()) % period
+    x, y = x % period, y % period
+    v1 = np.abs(x.squeeze() - y.squeeze())
     v2 = period - v1
 
     return np.minimum(v1, v2)

@@ -10,7 +10,7 @@ from .numpyro_models import (
     model_null,
 )
 
-from .posterior import *
+from .jax_module.posterior import *
 
 
 def check_shapes(

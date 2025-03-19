@@ -37,6 +37,11 @@ def ind(list, sublist):
 
 
 def ind2(large_list, small_list, verbose=False):
+    """
+    large_list: list of strings
+    small_list: list of strings
+    return the index of the small_list in the large_list
+    """
 
     if isinstance(small_list, str):
         small_list = [small_list]

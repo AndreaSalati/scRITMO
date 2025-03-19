@@ -220,11 +220,12 @@ def harmonic_regression_pvalue(t, y, omega=1):
 
     # Compute the chi-square p-value
     chi_square_p_value = stats.chi2.sf(chi_square_stat, df)
+    # adjusted_p_value = benjamini_hochberg_correction([chi_square_p_value])[0]
 
     return beta, chi_square_p_value
 
 
-def harmonic_regression_loop(E_ygt, t_u, omega=1, eval_fit="bic", return_bic=False):
+def harmonic_regression_loop(E_ygt, t_u, omega=1, eval_fit="bic", return_eval=True):
     """
     It takes the output of pseudobulk_loop and returns the parameters of the harmonic regression
     for each gene and celltype. It use harmonic_regression_bic to fit the data
@@ -233,7 +234,7 @@ def harmonic_regression_loop(E_ygt, t_u, omega=1, eval_fit="bic", return_bic=Fal
     - t_u: timepoints
     - omega: frequency
     - eval_fit: 'bic' or 'pvalue'
-    - return_bic: if True, the function returns the BIC/Pvalue of the harmonic regression
+    - return_eval: if True, the function returns the BIC/Pvalue of the harmonic regression
 
     Output:
     - res: np.array of shape (N_ct, N_g, 3) with the parameters of the harmonic regression
@@ -258,10 +259,25 @@ def harmonic_regression_loop(E_ygt, t_u, omega=1, eval_fit="bic", return_bic=Fal
             res[i, j, 1] = beta[1]
             res[i, j, 2] = beta[2]
             vals[i, j] = v
-    if return_bic:
+    if return_eval:
         return res, vals
     else:
         return res
+
+
+def benjamini_hochberg_correction(p_values):
+
+    p_values = np.array(p_values)
+    n = len(p_values)
+    sorted_indices = np.argsort(p_values)
+    sorted_p_values = p_values[sorted_indices]
+    corrected_p_values = np.empty(n)
+
+    # Apply the BH formula
+    for i, p in enumerate(sorted_p_values):
+        corrected_p_values[sorted_indices[i]] = min(p * n / (i + 1), 1.0)
+
+    return corrected_p_values
 
 
 def cSVD(res, center_around="mean", return_explained=False):
@@ -287,7 +303,7 @@ def cSVD(res, center_around="mean", return_explained=False):
             C[i, j] = res[i, j, 0] + 1j * res[i, j, 1]
 
     # SVD
-    U, S, Vh = np.linalg.svd(C.T, full_matrices=False)
+    U, S, Vh = np.linalg.svd(C.T, full_matrices=True)
     V = Vh.T
 
     # normalizing S

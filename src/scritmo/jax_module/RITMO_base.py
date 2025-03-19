@@ -1,12 +1,14 @@
 import numpy as np
 import scanpy as sc
-
-from .posterior import *
+from .jax_module.posterior import *
 from .circular import *
 from .numpyro_models_handles import *
-from .pseudobulk import pseudobulk_new, pseudo_bulk_time, change_shape, normalize_log_PB
+from .pseudobulk import pseudobulk_new
 from .basics import ccg
 import pickle
+from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, confusion_matrix
 
 
 class DataLoader:
@@ -134,3 +136,67 @@ class DataLoader:
         eps = cc**-1
         PB.layers["s_log"] = np.log(PB.layers["s_norm"] + eps) / np.log(base)
         return PB
+
+    def logistic_regression(
+        self,
+        gene_list,
+        layer="s_norm",
+        test_size=0.2,
+        random_state=42,
+        max_iter=1000,
+        n_jobs=-1,
+        save_path=None,
+        time_obs_field="ZTmod",
+    ):
+        """
+        Performs a logistic regression analysis to predict the
+        external time label. It uses the gene_list as features. It leverages
+        sklearn's LogisticRegression class.
+        Parameters:
+        - gene_list: list of genes to use as features
+        - layer: layer to use for the analysis
+        - test_size: proportion of the data to use as test set
+        - random_state: random seed
+        - max_iter: maximum number of iterations for the logistic regression
+        - n_jobs: number of jobs to run in parallel, -1 means all processors
+        """
+        self.LR_genes = np.intersect1d(gene_list, self.adata.var_names)
+
+        X = self.adata[:, self.LR_genes].layers[layer].toarray()
+        Y = self.adata.obs[time_obs_field].values
+
+        X_train, X_test, Y_train, Y_test = train_test_split(
+            X, Y, test_size=test_size, random_state=random_state
+        )
+
+        clf = LogisticRegression(
+            multi_class="multinomial", solver="lbfgs", max_iter=max_iter, n_jobs=n_jobs
+        )
+        # running the logistic regression
+        clf.fit(X_train, Y_train)
+        # storing a bunch of stuff
+        Y_pred_test = clf.predict(X_test)
+        Y_pred_total = clf.predict(X)
+        accuracy = accuracy_score(Y_test, Y_pred_test)
+        print(f"LR accuracy: {accuracy:.2f}")
+        cm = confusion_matrix(Y_test, Y_pred_test, normalize="true")
+        unique_labels = np.unique(Y)
+
+        # evaluating the performance with different metrics
+        LR_median_abs_error, LR_mean_abs_error, LR_root_mean_sq_error = (
+            self._eval_performance(Y_pred_total.squeeze(), Y.squeeze(), period=24)
+        )
+        # save LR results
+        self.add_attributes_and_save(
+            save_path=save_path,
+            gene_list=gene_list,
+            clf=clf,
+            Y_pred_total=Y_pred_total,
+            Y_pred_test=Y_pred_test,
+            accuracy=accuracy,
+            confusion_matrix=cm,
+            unique_labels=unique_labels,
+            LR_median_abs_error=LR_median_abs_error,
+            LR_mean_abs_error=LR_mean_abs_error,
+            LR_root_mean_sqrt_error=LR_root_mean_sq_error,
+        )

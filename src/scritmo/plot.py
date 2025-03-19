@@ -183,7 +183,7 @@ import numpy as np
 
 def plot_circadian_data(
     adata,
-    phi_MLE,
+    phis,
     g,
     ax=None,
     layer="spliced",
@@ -193,7 +193,7 @@ def plot_circadian_data(
 
     Parameters:
         adata (AnnData): AnnData object containing gene data.
-        phi_MLE (array): Phase values for scatter plot.
+        phis (array): Phase values for scatter plot.
         g (str): Gene name or index.
         counts (array): Normalization counts for spliced layer data.
         params_g (DataFrame): Parameter dataframe for GLM fit.
@@ -210,7 +210,7 @@ def plot_circadian_data(
 
     # Scatter plot of data points
     ax.scatter(
-        phi_MLE * rh,
+        phis * rh,
         adata[:, g].layers[layer].toarray().squeeze(),
         s=5,
         alpha=0.9,
@@ -229,7 +229,7 @@ def plot_circadian_data(
 
 def plot_circadian_data_and_fit(
     adata,
-    phi_MLE,
+    phis,
     g,
     counts,
     params_g,
@@ -241,7 +241,7 @@ def plot_circadian_data_and_fit(
 
     Parameters:
         adata (AnnData): AnnData object containing gene data.
-        phi_MLE (array): Phase values for scatter plot.
+        phis (array): Phase values for scatter plot.
         g (str): Gene name or index.
         counts (array): Normalization counts for spliced layer data.
         params_g (DataFrame): Parameter dataframe for GLM fit.
@@ -259,7 +259,7 @@ def plot_circadian_data_and_fit(
 
     # Scatter plot of data points
     ax.scatter(
-        phi_MLE * rh,
+        phis * rh,
         adata[:, g].layers[layer].toarray().squeeze() / counts,
         s=5,
         alpha=0.9,

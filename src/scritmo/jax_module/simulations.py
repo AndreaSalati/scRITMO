@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from jax.random import PRNGKey
 import pandas as pd
 
-from .posterior import get_likelihood
+from .jax_module.posterior import get_likelihood
 from .basics import df2dict, dict2df
 from .numpyro_models import model_MLE_NB
 

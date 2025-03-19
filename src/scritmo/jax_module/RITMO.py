@@ -1,18 +1,13 @@
 import numpy as np
 import numpyro
-import jax
 import scanpy as sc
-from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, confusion_matrix
 import pandas as pd
 import statsmodels.api as sm
 from statsmodels.discrete.discrete_model import NegativeBinomial
 from tqdm import tqdm
 
-
 from .basics import df2dict, dict2df, ccg
-from .posterior import *
+from .jax_module.posterior import *
 from .circular import *
 from .numpyro_models import (
     model_MLE_NB,
@@ -21,10 +16,8 @@ from .numpyro_models import (
 )
 
 from .numpyro_models_handles import *
-from .linear_regression import genes_polar_parameters, polar_genes_pandas
-from .pseudobulk import pseudobulk_new, pseudo_bulk_time
+from .linear_regression import polar_genes_pandas
 
-# from .pseudobulk import pseudobulk_new, pseudo_bulk_time
 from .RITMO_base import DataLoader
 from .RITMO_helper import (
     _eval_performance,
@@ -133,11 +126,6 @@ class RITMO(DataLoader):
         fixed_disp=0.1,
     ):
         """
-        WORKS WELL ONLY ON PSEUDOBULK??
-
-        DOESNT WORK WELL ON SINGLE CELL MAYBE GIVE UP ON THE DISP PARAMETER
-        AND USE THE STANDARD GLM FUNCTION
-
         This function fits the gene coefficients to the external time values (ph).
         It is a faster version of the fit_genes method, but less flexible.
         It is based on statsmodels' NegativeBinomial class.
@@ -151,8 +139,8 @@ class RITMO(DataLoader):
         - params_g: a dictionary containing initial estimates for gene coefficients
             needs to be indexed by the name of the parameters of 'model'
         - use_PB: whether to use the pseudobulked data
-        - fit_disp: whether to fit the dispersion parameter. It uses diffferent
-            models from statsmodels, always try False first
+        - fit_disp: whether to fit the dispersion parameter. It uses different
+            models from statsmodels, always try False first, as it is more stable
         - disp: the dispersion parameter, if fit_disp is False
         """
         # Remove genes with no expression, create Nan values
@@ -205,13 +193,13 @@ class RITMO(DataLoader):
             # Store the results, including the dispersion parameter (alpha)
             result_dict = {
                 "gene": g,
-                "a_g": result.params[0],
-                "b_g": result.params[1],
-                "m_g": result.params[2],
+                "a_g": result.params.iloc[0],
+                "b_g": result.params.iloc[1],
+                "m_g": result.params.iloc[2],
             }
 
             if fit_disp:
-                result_dict["disp"] = result.params[3]
+                result_dict["disp"] = result.params.iloc[3]
 
             results_list.append(result_dict)
             pvals.append(pval)
@@ -220,12 +208,12 @@ class RITMO(DataLoader):
         params_g = pd.DataFrame(results_list)
         # first column is index
         params_g = params_g.set_index("gene")
-        params_g_polar = polar_genes_pandas(params_g)
+        params_pol_g = polar_genes_pandas(params_g)
         model_stats = pd.DataFrame(pvals, index=genes_sc, columns=["pvalue"])
 
         self.add_attributes_and_save(
             save_path=save_path,
-            params_g_pol=params_g_polar,
+            params_pol_g=params_pol_g,
             params_g=params_g,
             genes_sc=genes_sc,
             ph=ph,
@@ -435,6 +423,7 @@ class RITMO(DataLoader):
     ):
         """
         This function, fits cells to the gene coefficients. It is a wrapper around the fit_phases function.
+        Here potentially everything can be fit togetjer
         Through the block list parameter, it is possible to fix some parameters during the optimization.
         Parameters:
         - genes_sc: list of genes to analyze
@@ -473,70 +462,6 @@ class RITMO(DataLoader):
             params_g=params_g,
             genes_sc=genes_sc,
             phi_c=np.array(svi_c.params["phi_c"]).squeeze() % (2 * np.pi),
-        )
-
-    def logistic_regression(
-        self,
-        gene_list,
-        layer="s_norm",
-        test_size=0.2,
-        random_state=42,
-        max_iter=1000,
-        n_jobs=-1,
-        save_path=None,
-        time_obs_field="ZTmod",
-    ):
-        """
-        Performs a logistic regression analysis to predict the
-        external time label. It uses the gene_list as features. It leverages
-        sklearn's LogisticRegression class.
-        Parameters:
-        - gene_list: list of genes to use as features
-        - layer: layer to use for the analysis
-        - test_size: proportion of the data to use as test set
-        - random_state: random seed
-        - max_iter: maximum number of iterations for the logistic regression
-        - n_jobs: number of jobs to run in parallel, -1 means all processors
-        """
-        self.LR_genes = np.intersect1d(gene_list, self.adata.var_names)
-
-        X = self.adata[:, self.LR_genes].layers[layer].toarray()
-        Y = self.adata.obs[time_obs_field].values
-
-        X_train, X_test, Y_train, Y_test = train_test_split(
-            X, Y, test_size=test_size, random_state=random_state
-        )
-
-        clf = LogisticRegression(
-            multi_class="multinomial", solver="lbfgs", max_iter=max_iter, n_jobs=n_jobs
-        )
-        # running the logistic regression
-        clf.fit(X_train, Y_train)
-        # storing a bunch of stuff
-        Y_pred_test = clf.predict(X_test)
-        Y_pred_total = clf.predict(X)
-        accuracy = accuracy_score(Y_test, Y_pred_test)
-        print(f"LR accuracy: {accuracy:.2f}")
-        cm = confusion_matrix(Y_test, Y_pred_test, normalize="true")
-        unique_labels = np.unique(Y)
-
-        # evaluating the performance with different metrics
-        LR_median_abs_error, LR_mean_abs_error, LR_root_mean_sq_error = (
-            self._eval_performance(Y_pred_total.squeeze(), Y.squeeze(), period=24)
-        )
-        # save LR results
-        self.add_attributes_and_save(
-            save_path=save_path,
-            gene_list=gene_list,
-            clf=clf,
-            Y_pred_total=Y_pred_total,
-            Y_pred_test=Y_pred_test,
-            accuracy=accuracy,
-            confusion_matrix=cm,
-            unique_labels=unique_labels,
-            LR_median_abs_error=LR_median_abs_error,
-            LR_mean_abs_error=LR_mean_abs_error,
-            LR_root_mean_sqrt_error=LR_root_mean_sq_error,
         )
 
 
