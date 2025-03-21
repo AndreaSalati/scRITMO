@@ -6,20 +6,22 @@ import statsmodels.api as sm
 from statsmodels.discrete.discrete_model import NegativeBinomial
 from tqdm import tqdm
 
-from .basics import df2dict, dict2df, ccg
-from .jax_module.posterior import *
-from .circular import *
-from .numpyro_models import (
+from scritmo.basics import df2dict, dict2df, ccg
+from scritmo.circular import *
+from scritmo.linear_regression import polar_genes_pandas
+
+from scritmo.jax_module.posterior import *
+from scritmo.jax_module.numpyro_models import (
     model_MLE_NB,
     guide_MLE,
     model_null,
 )
 
-from .numpyro_models_handles import *
-from .linear_regression import polar_genes_pandas
+from scritmo.jax_module.numpyro_models_handles import *
 
-from .RITMO_base import DataLoader
-from .RITMO_helper import (
+
+from scritmo.jax_module.RITMO_base import DataLoader
+from scritmo.jax_module.RITMO_helper import (
     _eval_performance,
     _filter_genes_and_prepare_data,
     check_shapes,

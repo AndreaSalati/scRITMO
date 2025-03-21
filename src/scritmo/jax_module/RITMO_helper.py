@@ -1,16 +1,16 @@
 import numpy as np
 import pandas as pd
 
-from .basics import df2dict, dict2df, ccg
-from .circular import *
+from scritmo.basics import df2dict, dict2df, ccg
+from scritmo.circular import *
 
-from .numpyro_models import (
+from scritmo.jax_module.numpyro_models import (
     model_MLE_NB,
     guide_MLE,
     model_null,
 )
 
-from .jax_module.posterior import *
+from scritmo.jax_module.posterior import *
 
 
 def check_shapes(

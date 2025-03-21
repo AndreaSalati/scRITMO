@@ -1,10 +1,13 @@
 import numpy as np
 import scanpy as sc
-from .jax_module.posterior import *
-from .circular import *
-from .numpyro_models_handles import *
-from .pseudobulk import pseudobulk_new
-from .basics import ccg
+
+from scritmo.circular import *
+from scritmo.pseudobulk import pseudobulk_new
+from scritmo.basics import ccg
+
+from scritmo.jax_module.posterior import *
+from scritmo.jax_module.numpyro_models_handles import *
+
 import pickle
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.model_selection import train_test_split

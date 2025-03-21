@@ -5,9 +5,9 @@ import jax.numpy as jnp
 from jax.random import PRNGKey
 import pandas as pd
 
-from .jax_module.posterior import get_likelihood
-from .basics import df2dict, dict2df
-from .numpyro_models import model_MLE_NB
+from scritmo.jax_module.posterior import get_likelihood
+from scritmo.jax_module.numpyro_models import model_MLE_NB
+from scritmo.basics import df2dict, dict2df
 
 
 # preparing for the sampling
