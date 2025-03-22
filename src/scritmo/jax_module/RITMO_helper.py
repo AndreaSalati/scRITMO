@@ -3,6 +3,7 @@ import pandas as pd
 
 from scritmo.basics import df2dict, dict2df, ccg
 from scritmo.circular import *
+from scipy.stats import circmean, circvar, circstd
 
 from scritmo.jax_module.numpyro_models import (
     model_MLE_NB,
@@ -161,7 +162,7 @@ def _compute_posterior_statistics(self, l_xc, Nx):
     """Compute posterior statistics."""
     delta_phi = 2 * np.pi / Nx
     # deltaH_c = np.apply_along_axis(delta_entropy, axis=0, arr=l_xc * delta_phi)
-    post_mean_c = np.apply_along_axis(circ_mean_P, 0, l_xc * delta_phi)
-    post_var_c = np.apply_along_axis(circ_var_P, 0, l_xc * delta_phi)
-    post_std_c = np.apply_along_axis(circ_std_P, 0, l_xc * delta_phi)
+    post_mean_c = np.apply_along_axis(circmean, 0, l_xc * delta_phi)
+    post_var_c = np.apply_along_axis(circvar, 0, l_xc * delta_phi)
+    post_std_c = np.apply_along_axis(circstd, 0, l_xc * delta_phi)
     return post_mean_c, post_var_c, post_std_c

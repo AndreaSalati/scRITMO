@@ -5,4 +5,9 @@ from .plot import *
 from .pseudobulk import *
 
 
-from .jax_module import *
+try:
+    import jax
+    import numpyro
+    from .jax_module import *
+except ImportError:
+    pass

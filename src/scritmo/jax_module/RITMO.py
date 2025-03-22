@@ -210,12 +210,12 @@ class RITMO(DataLoader):
         params_g = pd.DataFrame(results_list)
         # first column is index
         params_g = params_g.set_index("gene")
-        params_pol_g = polar_genes_pandas(params_g)
+        params_g_pol = polar_genes_pandas(params_g)
         model_stats = pd.DataFrame(pvals, index=genes_sc, columns=["pvalue"])
 
         self.add_attributes_and_save(
             save_path=save_path,
-            params_pol_g=params_pol_g,
+            params_g_pol=params_g_pol,
             params_g=params_g,
             genes_sc=genes_sc,
             ph=ph,
