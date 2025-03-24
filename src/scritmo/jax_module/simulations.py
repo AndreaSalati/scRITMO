@@ -13,7 +13,15 @@ from scritmo.basics import df2dict, dict2df
 # preparing for the sampling
 
 
-def simulate_dataset(ph, params_g, seq_depth=2e4, ref_dataset=None, n_samples=1):
+def simulate_dataset(
+    ph,
+    params_g,
+    seq_depth=2e4,
+    ref_dataset=None,
+    n_samples=1,
+    random_seed=0,
+    md_columns=["ZTmod", "sample_name", "celltype"],
+):
     """
     Simulate a dataset from the model. The model is defined by the parameters in params_g
     and the phase ph. The data is simulated at a given sequencing depth.
@@ -21,13 +29,18 @@ def simulate_dataset(ph, params_g, seq_depth=2e4, ref_dataset=None, n_samples=1)
     Parameters:
     ph: array-like
         The phase of the data to be simulated. Shape (Nc, 1)
-    params_g: The parameters of the model.
+    params_g: The gene parameters of the model (amplitudes and phases)
     seq_depth: The sequencing depth of the simulated data.
     ref_dataset: The reference dataset to be used for the simulation. Needs
         to be anndata object. It basically copies the metadata from the reference.
         Notice that the n_samples parameter is harcdoced to 1 when ref_dataset is not None.
     n_samples: The number of samples to be simulated. It's differents "version"
-        of the same cell.
+        of the same cell. Passing mutiple times the same phase is sort of similar
+        to pass n_sample > 1
+    random_seed: The random seed to be used for the simulation.
+    md_columns: The metadata columns to be used for the simulation. It should
+        be the same as the ones used in the reference dataset. If ref_dataset is None,
+        this parameter is ignored.
     """
 
     Nc = ph.shape[0]
@@ -42,7 +55,7 @@ def simulate_dataset(ph, params_g, seq_depth=2e4, ref_dataset=None, n_samples=1)
     like = get_likelihood(
         model=model_MLE_NB, params=params_model, data=None, counts=counts
     )
-    sim_data = like.sample(key=PRNGKey(0), sample_shape=(n_samples,))
+    sim_data = like.sample(key=PRNGKey(random_seed), sample_shape=(n_samples,))
 
     # making sim_data compatible with RITMO class
     if ref_dataset is not None:
@@ -51,9 +64,7 @@ def simulate_dataset(ph, params_g, seq_depth=2e4, ref_dataset=None, n_samples=1)
         adata_sim = anndata.AnnData(X=sim_data, var=params_g.index.values)
         adata_sim.var_names = params_g.index.values
         adata_sim.layers["spliced"] = adata_sim.X
-        adata_sim.obs[["ZTmod", "sample_name", "celltype"]] = ref_dataset.obs[
-            ["ZTmod", "sample_name", "celltype"]
-        ].values
+        adata_sim.obs[md_columns] = ref_dataset.obs[md_columns].values
         return adata_sim
     else:
         return sim_data
