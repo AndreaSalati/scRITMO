@@ -348,7 +348,7 @@ class RITMO(DataLoader):
         # turn inf into nan
         post_std_c[np.isinf(post_std_c)] = np.nan
         nn = ~np.isnan(post_std_c)
-        print(f"median std of posteriors = {np.median(post_std_c[nn]) * self.rh:.2f}")
+        print(f"median std of posteriors = {np.median(post_std_c[nn]) * self.rh:.2f}h")
 
         self.add_attributes_and_save(
             save_path=save_path,

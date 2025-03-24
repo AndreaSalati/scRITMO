@@ -165,7 +165,6 @@ def _compute_posterior_statistics(self, l_xc, Nx):
     post_mean_c = np.apply_along_axis(circ_mean_P, 0, l_xc * delta_phi)
     post_var_c = np.apply_along_axis(circ_var_P, 0, l_xc * delta_phi)
     post_std_c = np.apply_along_axis(circ_std_P, 0, l_xc * delta_phi)
-    print("output of this is wrong! fix it!")
     return post_mean_c, post_var_c, post_std_c
 
 
