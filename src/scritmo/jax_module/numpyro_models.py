@@ -137,13 +137,20 @@ def model_MCMC_NB(y, priors, **kwargs):
     disp = numpyro.sample(
         "disp", dist.Gamma(priors["disp"], 1.0)  # Positive prior for dispersion
     )
-    a_g = numpyro.sample("a_g", dist.Normal(0, 1))
-    b_g = numpyro.sample("b_g", dist.Normal(1, 1))
-    m_g = numpyro.sample("m_g", dist.Normal(-2, 1))
-    phi_c = numpyro.sample("phi_c", dist.Normal(0, 1))
+    with numpyro.plate("genes", Ng, dim=-1):
+        a_g = numpyro.sample("a_g", dist.Normal(0, 1))
+        b_g = numpyro.sample("b_g", dist.Normal(0, 1))
+        m_g = numpyro.sample("m_g", dist.Normal(-2, 1))
+
+    with numpyro.plate("cells", Nc, dim=-2):
+        # Sample phi_c from a prior distribution (for example, Normal)
+        # phi_c = numpyro.sample("phi_c", dist.Normal(0, 1))
+        # von mises prior
+        phi_xy = numpyro.sample("phi_xy", dist.Normal(np.zeros((Nc, 2)), 1.0))
+        cos_sin = phi_xy / jnp.linalg.norm(phi_xy, axis=1)[:, None]
 
     # Compute expected values
-    E = a_g * jnp.cos(omega * phi_c) + b_g * jnp.sin(omega * phi_c) + m_g
+    E = a_g * cos_sin[:, 0][:, jnp.newaxis] + b_g * cos_sin[:, 1][:, jnp.newaxis] + m_g
     E = jnp.exp(E) * counts
 
     conc = 1 / disp

@@ -3,7 +3,7 @@ from scipy.stats import circmean, circstd, circvar
 
 
 # metrics to evaluate the performance of the model
-def circular_deviation(x, y, period=2 * np.pi):
+def circular_deviation(x, y, period):
     """
     It computes the circular absolute deviation between two vectors x and y
     PASS SQUEEZED ARRAYS
@@ -23,7 +23,7 @@ def circular_deviation(x, y, period=2 * np.pi):
     return np.minimum(v1, v2)
 
 
-def circular_median_absolute_deviation(x, y, period=24.0):
+def circular_median_absolute_deviation(x, y, period):
     """
     It computes the circular mean absolute deviation between two vectors x and y
     PASS SQUEEZED ARRAYS
@@ -34,7 +34,7 @@ def circular_median_absolute_deviation(x, y, period=24.0):
     return np.median(v)
 
 
-def circular_mean_absolute_deviation(x, y, period=24):
+def circular_mean_absolute_deviation(x, y, period):
     """
     It computes the circular mean absolute deviation between two vectors x and y
     PASS SQUEEZED ARRAYS
@@ -43,7 +43,7 @@ def circular_mean_absolute_deviation(x, y, period=24):
     return np.mean(v)
 
 
-def circular_sqrt_mean_squared_error(x, y, period=24):
+def circular_sqrt_mean_squared_error(x, y, period):
     """
     It computes the srt of sum of squared errors absolute deviation between two vectors x and y
     PASS SQUEEZED ARRAYS
@@ -162,3 +162,59 @@ def circular_dispersion_samples(phi, samples):
         )
 
     return circ_mean, mad, mead
+
+
+def compute_posterior_statistics(l_xc):
+    """
+    Compute posterior circular statistics.
+    It assumes that the l_xc is normalized such that it numerically integrate to 1 on
+    the interval [0, 2pi]. Also it is assumed that the l values for each cell are
+    calcualted with a linspace of 0, 2pi
+    """
+    Nx = l_xc.shape[0]
+    delta_phi = 2 * np.pi / Nx
+    # deltaH_c = np.apply_along_axis(delta_entropy, axis=0, arr=l_xc * delta_phi)
+    post_mean_c = np.apply_along_axis(circ_mean_P, 0, l_xc * delta_phi)
+    post_var_c = np.apply_along_axis(circ_var_P, 0, l_xc * delta_phi)
+    post_std_c = np.apply_along_axis(circ_std_P, 0, l_xc * delta_phi)
+    return post_mean_c, post_var_c, post_std_c
+
+
+# fucntions that used to get the moments of the numerical approximation of the
+# posterior distribution of the phase
+def circ_mean_P(P):
+
+    phis = np.linspace(0, 2 * np.pi, P.shape[0])
+    # take complex arg of sum
+    mu = np.angle(np.sum(np.exp(1j * phis) * P))
+    return mu % (2 * np.pi)
+
+
+def circ_var_P(P):
+
+    phis = np.linspace(0, 2 * np.pi, P.shape[0])
+    # take complex arg of sum
+    var = 1 - np.abs(np.sum(np.exp(1j * phis) * P))
+    return var
+
+
+def circ_std_P(P):
+
+    phis = np.linspace(0, 2 * np.pi, P.shape[0])
+    std = np.sqrt(-2 * np.log(np.abs(np.sum(np.exp(1j * phis) * P))))
+    return std
+
+
+def circ_mode(l_xc):
+    """
+    This function is used to find the MODE of the distribution.
+    Very often distributions are bimodal, and gradient descent fails
+    to find the correct solution.
+    """
+    # for every cell get the argmax of the likelihood
+    phi_x = np.linspace(0, 2 * np.pi, l_xc.shape[0])
+
+    phi_max_ind = np.argmax(l_xc, axis=0)
+    # phi_max_ind = list(phi_max_ind)
+    phi_mode = phi_x[phi_max_ind]
+    return phi_mode

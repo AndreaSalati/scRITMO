@@ -7,7 +7,7 @@ from statsmodels.discrete.discrete_model import NegativeBinomial
 from tqdm import tqdm
 
 from scritmo.basics import df2dict, dict2df, ccg
-from scritmo.circular import *
+from scritmo.circular import compute_posterior_statistics
 from scritmo.linear_regression import polar_genes_pandas
 
 from scritmo.jax_module.posterior import *
@@ -26,7 +26,7 @@ from scritmo.jax_module.RITMO_helper import (
     _filter_genes_and_prepare_data,
     check_shapes,
     _configure_jax_device,
-    _compute_posterior_statistics,
+    # _compute_posterior_statistics,
     eval_fit_genes,
 )
 
@@ -341,9 +341,7 @@ class RITMO(DataLoader):
 
         l_xc = normalize_ll_xc(self.ll_xc)
         # Compute posterior statistics
-        post_mean_c, post_var_c, post_std_c = self._compute_posterior_statistics(
-            l_xc, Nx
-        )
+        post_mean_c, post_var_c, post_std_c = compute_posterior_statistics(l_xc)
 
         # turn inf into nan
         post_std_c[np.isinf(post_std_c)] = np.nan
@@ -473,4 +471,4 @@ RITMO._eval_performance = _eval_performance
 RITMO._filter_genes_and_prepare_data = _filter_genes_and_prepare_data
 RITMO.eval_fit_genes = eval_fit_genes
 RITMO._configure_jax_device = _configure_jax_device
-RITMO._compute_posterior_statistics = _compute_posterior_statistics
+# RITMO._compute_posterior_statistics = _compute_posterior_statistics

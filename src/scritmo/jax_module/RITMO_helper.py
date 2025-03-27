@@ -156,38 +156,3 @@ def _configure_jax_device(self, jax_device):
     """Configure JAX device."""
     if jax_device == "cpu":
         jax.config.update("jax_platform_name", "cpu")
-
-
-def _compute_posterior_statistics(self, l_xc, Nx):
-    """Compute posterior statistics."""
-    delta_phi = 2 * np.pi / Nx
-    # deltaH_c = np.apply_along_axis(delta_entropy, axis=0, arr=l_xc * delta_phi)
-    post_mean_c = np.apply_along_axis(circ_mean_P, 0, l_xc * delta_phi)
-    post_var_c = np.apply_along_axis(circ_var_P, 0, l_xc * delta_phi)
-    post_std_c = np.apply_along_axis(circ_std_P, 0, l_xc * delta_phi)
-    return post_mean_c, post_var_c, post_std_c
-
-
-# fucntions that used to get the moments of the numerical approximation of the
-# posterior distribution of the phase
-def circ_mean_P(P):
-
-    phis = np.linspace(0, 2 * np.pi, P.shape[0])
-    # take complex arg of sum
-    mu = np.angle(np.sum(np.exp(1j * phis) * P))
-    return mu % (2 * np.pi)
-
-
-def circ_var_P(P):
-
-    phis = np.linspace(0, 2 * np.pi, P.shape[0])
-    # take complex arg of sum
-    var = 1 - np.abs(np.sum(np.exp(1j * phis) * P))
-    return var
-
-
-def circ_std_P(P):
-
-    phis = np.linspace(0, 2 * np.pi, P.shape[0])
-    std = np.sqrt(-2 * np.log(np.abs(np.sum(np.exp(1j * phis) * P))))
-    return std
