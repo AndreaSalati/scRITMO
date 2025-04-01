@@ -43,7 +43,7 @@ def normalize_ll(v):
     return v / Z
 
 
-def normalize_ll_xc(ll_xc):
+def normalize_ll_xc(ll_xc, use_bin_width=True):
     """
     Takes a matrix of log likelihoods and returns a matrix of probabilities
     it is normalized across dim=0, the pdf is normalized over the 0, 2pi range
@@ -53,10 +53,14 @@ def normalize_ll_xc(ll_xc):
 
     """
     Nx, Nc = ll_xc.shape
+    delta_phi = 2 * np.pi / Nx if use_bin_width else 1
+    # clip the values to minimum -50
+    ll_xc = np.clip(ll_xc, -50, None)
     mins = np.min(ll_xc, axis=0)
     a = ll_xc - mins
+    # maybe clip
     a = np.exp(a)
-    area = a.sum(axis=0) * (2 * np.pi / Nx)
+    area = a.sum(axis=0) * delta_phi
     return a / area
 
 
