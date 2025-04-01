@@ -115,17 +115,17 @@ def cells_posteriors(model, y, svi_g, svi_c, Nx=1000, **kwargs):
     return ll_xcg
 
 
-def fix_phases(l_xc, phi_x):
+def fix_phases(ll_xc, phi_x):
     """
     This function is used to find the MODE of the distribution.
     Very often distributions are bimodal, and gradient descent fails
     to find the correct solution.
     """
     # for every cell get the argmax of the likelihood
-    phi_max_ind = np.argmax(l_xc, axis=0)
-    # phi_max_ind = list(phi_max_ind)
-    phi_NB2 = phi_x[phi_max_ind]
-    return phi_NB2
+    phi_max_ind = np.argmax(ll_xc, axis=0)
+    phi_mode = phi_x[phi_max_ind]
+    ll_mle = ll_xc[phi_max_ind, np.arange(ll_xc.shape[1])]
+    return phi_mode, ll_mle
 
 
 def get_likelihood(model, params, data, jax_device="cpu", **kwargs):

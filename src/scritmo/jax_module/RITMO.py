@@ -289,7 +289,7 @@ class RITMO(DataLoader):
         ll_xcg = get_ll(model, model_params, data_c, counts=counts)
         ll_xc = np.array(ll_xcg.sum(axis=2))
 
-        phi_MLE_c = fix_phases(ll_xc, phi_x)
+        phi_MLE_c, ll_mle = fix_phases(ll_xc, phi_x)
 
         # saving results in the object
         self.add_attributes_and_save(
@@ -297,6 +297,7 @@ class RITMO(DataLoader):
             params_g=params_g,
             disp=disp,
             phi_MLE_c=phi_MLE_c,
+            ll_mle=ll_mle,
             ll_xc=ll_xc,
             ll_xcg=ll_xcg,
         )
