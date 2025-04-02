@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from .linear_regression import harmonic_function_exp
+from scritmo.linear_regression import polar_genes_pandas
 
 
 def polar_plot(title="", inner_ring_size=0):
@@ -85,7 +86,7 @@ def plot_count_histo(x, normalize=False, **kwargs):
     plt.bar(bin_x, bin_y, width=0.9, align="center", **kwargs)
 
 
-def polar_plot_params_g(df, genes_to_plot=None, amp_lim=0.5):
+def polar_plot_params_g(df, genes_to_plot=None, amp_lim=0.5, cartesian=False):
     """
     Takes as input a pandas dataframe with columns "amp", "phase", "mu"
     and plots the genes in a polar plot
@@ -93,6 +94,10 @@ def polar_plot_params_g(df, genes_to_plot=None, amp_lim=0.5):
 
     """
     ax = polar_plot()
+
+    if cartesian:
+        df = polar_genes_pandas(df)
+
     if genes_to_plot is None:
         genes_to_plot = df.index
 
