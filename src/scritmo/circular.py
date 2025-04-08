@@ -167,16 +167,13 @@ def circular_dispersion_samples(phi, samples):
 def compute_posterior_statistics(l_xc):
     """
     Compute posterior circular statistics.
-    It assumes that the l_xc is normalized such that it numerically integrate to 1 on
-    the interval [0, 2pi]. Also it is assumed that the l values for each cell are
-    calcualted with a linspace of 0, 2pi
+    To be sure that l_xc is a discrete pdf it re normalizes it.
     """
-    Nx = l_xc.shape[0]
-    delta_phi = 2 * np.pi / Nx
+    l_xc = l_xc / l_xc.sum(axis=0)
     # deltaH_c = np.apply_along_axis(delta_entropy, axis=0, arr=l_xc * delta_phi)
-    post_mean_c = np.apply_along_axis(circ_mean_P, 0, l_xc * delta_phi)
-    post_var_c = np.apply_along_axis(circ_var_P, 0, l_xc * delta_phi)
-    post_std_c = np.apply_along_axis(circ_std_P, 0, l_xc * delta_phi)
+    post_mean_c = np.apply_along_axis(circ_mean_P, 0, l_xc)
+    post_var_c = np.apply_along_axis(circ_var_P, 0, l_xc)
+    post_std_c = np.apply_along_axis(circ_std_P, 0, l_xc)
     return post_mean_c, post_var_c, post_std_c
 
 

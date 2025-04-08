@@ -86,14 +86,14 @@ def plot_count_histo(x, normalize=False, **kwargs):
     plt.bar(bin_x, bin_y, width=0.9, align="center", **kwargs)
 
 
-def polar_plot_params_g(df, genes_to_plot=None, amp_lim=0.5, cartesian=False):
+def polar_plot_params_g(df, genes_to_plot=None, title="", amp_lim=0.5, cartesian=False):
     """
     Takes as input a pandas dataframe with columns "amp", "phase", "mu"
     and plots the genes in a polar plot
     gene names need to be on df.index
 
     """
-    ax = polar_plot()
+    ax = polar_plot(title=title)
 
     if cartesian:
         df = polar_genes_pandas(df)
