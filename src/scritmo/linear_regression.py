@@ -62,10 +62,7 @@ def polar_genes_pandas(res, rel_ampl=False):
     N_g, _ = res.shape
     res_pol = res.copy()
 
-    if res.columns.shape[0] == 4:
-        res_pol.columns = ["amp", "phase", "mean", "disp"]
-    else:
-        res_pol.columns = ["amp", "phase", "mean"]
+    res_pol.columns = ["amp", "phase", "mean"] + list(res_pol.columns[3:])
 
     for j in range(N_g):
         amp, phase, mu = polar_parameters(res.iloc[j, 0:3].values, rel_ampl=rel_ampl)
