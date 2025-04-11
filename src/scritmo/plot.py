@@ -1,8 +1,9 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from .linear_regression import harmonic_function_exp
+from .linear_regression import harmonic_function_exp, harmonic_function
 from scritmo.linear_regression import polar_genes_pandas
+from .basics import w, rh
 
 
 def polar_plot(title="", inner_ring_size=0):
@@ -182,46 +183,99 @@ def paper_style():
     )
 
 
-import matplotlib.pyplot as plt
-import numpy as np
+def bin_data(
+    adata,
+    covariate,
+    genes,
+    layer,
+    n_bins,
+    normalize=True,
+):
+
+    # Get expression values
+    expression = adata[:, genes].layers[layer].toarray().squeeze()
+    n_genes = expression.shape[1]
+
+    # Bin the data
+    bin_edges = np.linspace(covariate.min(), covariate.max(), n_bins + 1)
+    bin_indices = np.digitize(covariate, bin_edges) - 1
+    bin_indices[bin_indices == n_bins] = 0  # Wrap around for circular data
+
+    # Calculate the center of each bin
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+    # Calculate mean expression for each bin
+    binned_expr = np.zeros((n_bins, n_genes))
+    for i in range(n_bins):
+        # Check if there are data points in this bin
+        if np.sum(bin_indices == i) > 0:
+            binned_expr[i] = np.mean(expression[bin_indices == i], axis=0)
+        else:
+            binned_expr[i] = np.nan  # No data in this bin
+
+    # Plot binned data
+    valid_bins = ~np.isnan(binned_expr)
+
+    return bin_centers, binned_expr
 
 
 def plot_circadian_data(
     adata,
     phis,
     g,
+    counts,
     ax=None,
     layer="spliced",
+    n_bins=None,
 ):
-    """
-    Creates a plot of circadian expression data and GLM fit, returning an axis object.
-
-    Parameters:
-        adata (AnnData): AnnData object containing gene data.
-        phis (array): Phase values for scatter plot.
-        g (str): Gene name or index.
-        counts (array): Normalization counts for spliced layer data.
-        params_g (DataFrame): Parameter dataframe for GLM fit.
-        ax (matplotlib.axes._axes.Axes, optional): Axis to plot on. If None, creates a new one.
-
-    Returns:
-        matplotlib.axes._axes.Axes: Axis object with the plot.
-    """
     if ax is None:
         fig, ax = plt.subplots()
 
     w = 2 * np.pi / 24
     rh = w**-1
+    phi_x = np.linspace(0, 2 * np.pi, 100)
 
-    # Scatter plot of data points
-    ax.scatter(
-        phis * rh,
-        adata[:, g].layers[layer].toarray().squeeze(),
-        s=5,
-        alpha=0.9,
-        label="data",
-        c=adata.obs.ZTmod,
-    )
+    # Get expression values
+    expression = adata[:, g].layers[layer].toarray().squeeze() / counts
+
+    if n_bins is not None:
+        # Bin the data
+        bin_edges = np.linspace(0, 2 * np.pi, n_bins + 1)
+        bin_indices = np.digitize(phis, bin_edges) - 1
+        bin_indices[bin_indices == n_bins] = 0  # Wrap around for circular data
+
+        # Calculate the center of each bin
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+        # Calculate mean expression for each bin
+        binned_expr = np.zeros(n_bins)
+        for i in range(n_bins):
+            # Check if there are data points in this bin
+            if np.sum(bin_indices == i) > 0:
+                binned_expr[i] = np.mean(expression[bin_indices == i])
+            else:
+                binned_expr[i] = np.nan  # No data in this bin
+
+        # Plot binned data
+        valid_bins = ~np.isnan(binned_expr)
+        ax.scatter(
+            bin_centers[valid_bins] * rh,
+            binned_expr[valid_bins],
+            s=20,
+            alpha=0.9,
+            label="binned data",
+            marker="o",
+        )
+    else:
+        # Plot original data points
+        ax.scatter(
+            phis * rh,
+            expression,
+            s=5,
+            alpha=0.9,
+            label="data",
+            c=adata.obs.ZTmod,
+        )
 
     # Plot details
     plt.title(f"{g}")
@@ -240,9 +294,11 @@ def plot_circadian_data_and_fit(
     params_g,
     ax=None,
     layer="spliced",
+    n_bins=None,
 ):
     """
     Creates a plot of circadian expression data and GLM fit, returning an axis object.
+    If n_bins is provided, data will be binned by phase before plotting.
 
     Parameters:
         adata (AnnData): AnnData object containing gene data.
@@ -251,28 +307,22 @@ def plot_circadian_data_and_fit(
         counts (array): Normalization counts for spliced layer data.
         params_g (DataFrame): Parameter dataframe for GLM fit.
         ax (matplotlib.axes._axes.Axes, optional): Axis to plot on. If None, creates a new one.
+        layer (str): Layer of AnnData object to use. Default is "spliced".
+        n_bins (int, optional): Number of bins to use for data. If None, no binning is performed.
 
     Returns:
         matplotlib.axes._axes.Axes: Axis object with the plot.
     """
-    if ax is None:
-        fig, ax = plt.subplots()
-
-    w = 2 * np.pi / 24
-    phi_x = np.linspace(0, 2 * np.pi, 100)
-    rh = w**-1
-
-    # Scatter plot of data points
-    ax.scatter(
-        phis * rh,
-        adata[:, g].layers[layer].toarray().squeeze() / counts,
-        s=5,
-        alpha=0.9,
-        label="data",
-        c=adata.obs.ZTmod,
+    # First plot the data points using plot_circadian_data
+    ax = plot_circadian_data(
+        adata, phis, g, ax=ax, layer=layer, n_bins=n_bins, counts=counts
     )
 
-    # GLM fit plot
+    # Now add the GLM fit
+    w = 2 * np.pi / 24
+    rh = w**-1
+    phi_x = np.linspace(0, 2 * np.pi, 100)
+
     ax.plot(
         phi_x * rh,
         harmonic_function_exp(phi_x * rh, params_g.loc[g][:3], omega=w),
@@ -280,10 +330,68 @@ def plot_circadian_data_and_fit(
         label="GLM fit",
     )
 
-    # Plot details
-    plt.title(f"{g}")
-    ax.set_xlabel("Circadian phase")
-    ax.set_ylabel("Normalized expression")
+    # Update legend since we've added a new line
     ax.legend()
 
     return ax
+
+
+# def plot_circadian_data_and_fit_log(
+#     adata,
+#     phis,
+#     g,
+#     counts,
+#     params_g,
+#     ax=None,
+#     eps=None,
+#     layer="spliced",
+# ):
+#     """
+#     Creates a plot of circadian expression data and GLM fit, returning an axis object.
+
+#     Parameters:
+#         adata (AnnData): AnnData object containing gene data.
+#         phis (array): Phase values for scatter plot.
+#         g (str): Gene name or index.
+#         counts (array): Normalization counts for spliced layer data.
+#         params_g (DataFrame): Parameter dataframe for GLM fit.
+#         ax (matplotlib.axes._axes.Axes, optional): Axis to plot on. If None, creates a new one.
+
+#     Returns:
+#         matplotlib.axes._axes.Axes: Axis object with the plot.
+#     """
+#     if ax is None:
+#         fig, ax = plt.subplots()
+
+#     if eps is None:
+#         eps = np.median(1 / counts)
+
+#     phi_x = np.linspace(0, 2 * np.pi, 100)
+#     data = adata[:, g].layers[layer].toarray().squeeze() / counts
+#     data = np.log(data + eps)
+
+#     # Scatter plot of data points
+#     ax.scatter(
+#         phis * rh,
+#         data,
+#         s=5,
+#         alpha=0.9,
+#         label="data",
+#         c=adata.obs.ZTmod,
+#     )
+
+#     # GLM fit plot
+#     ax.plot(
+#         phi_x * rh,
+#         harmonic_function(phi_x * rh, params_g.loc[g][:3], omega=w),
+#         c="red",
+#         label="GLM fit",
+#     )
+
+#     # Plot details
+#     plt.title(f"{g}")
+#     ax.set_xlabel("Circadian phase")
+#     ax.set_ylabel("Normalized expression")
+#     ax.legend()
+
+#     return ax
