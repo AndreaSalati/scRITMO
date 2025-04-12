@@ -152,6 +152,22 @@ def harmonic_function(t, beta, omega=1, basis="cartesian", rel_ampl=False):
         return out
 
 
+def harmonic_function2(t, beta, omega=1):
+    """
+    takes the parameters of the linear regression and returns the
+    the function evaluated at times t:
+    beta: parameters of the linear regression, 2 harmonics, 5 parameters
+    """
+
+    return (
+        beta[0] * np.cos(omega * t)
+        + beta[1] * np.sin(omega * t)
+        + beta[2] * np.cos(2 * omega * t)
+        + beta[3] * np.sin(2 * omega * t)
+        + beta[-1]
+    )
+
+
 def harmonic_regression_bic(t, y, omega=1):
     """
     this function peforms linear harmonic regression but also

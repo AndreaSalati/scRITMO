@@ -189,7 +189,6 @@ def bin_data(
     genes,
     layer,
     n_bins,
-    normalize=True,
 ):
 
     # Get expression values
