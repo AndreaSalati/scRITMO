@@ -3,6 +3,7 @@ from .circular import *
 from .linear_regression import *
 from .plot import *
 from .pseudobulk import *
+from .gene_lists import *
 
 
 try:

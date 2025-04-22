@@ -1,24 +1,6 @@
 import numpy as np
 import pandas as pd
 
-ccg = np.array(
-    [
-        "Arntl",
-        "Npas2",
-        "Cry1",
-        "Cry2",
-        "Per1",
-        "Per2",
-        "Nr1d1",
-        "Nr1d2",
-        "Tef",
-        "Dbp",
-        "Ciart",
-        "Per3",
-        "Bmal1",
-    ]
-)
-
 w = 2 * np.pi / 24
 rh = w**-1
 
