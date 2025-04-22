@@ -5,6 +5,8 @@ import pandas as pd
 import statsmodels.api as sm
 from statsmodels.discrete.discrete_model import NegativeBinomial
 from scipy.stats import chi2
+from tqdm import tqdm
+from scritmo import create_harmonic_design_matrix
 
 
 def harmonic_fit_genes(
@@ -103,8 +105,13 @@ def harmonic_fit_genes(
     # Fit models for each gene
     results_list = []
     pvals = []
+    bics = []
 
-    for gene_index, gene_name in enumerate(genes):
+    # loop with tqdm for progress bar
+    for gene_index, gene_name in tqdm(
+        enumerate(genes), total=len(genes), desc="Fitting genes"
+    ):
+        # for gene_index, gene_name in enumerate(genes):
         # Extract the gene counts
         if isinstance(data, pd.DataFrame):
             gene_counts = data[gene_name].values
@@ -138,6 +145,13 @@ def harmonic_fit_genes(
             llr = 2 * (result.llf - result_null.llf)
             pval = 1 - chi2.cdf(llr, 2)
 
+            # Calculate BIC for model selection
+            bic = -2 * result.llf + np.log(len(gene_counts)) * (len(result.params) + 1)
+            bic_null = -2 * result_null.llf + np.log(len(gene_counts)) * (
+                len(result_null.params) + 1
+            )
+            delta_bic = bic - bic_null
+
             # Store the results
             result_dict = {
                 "gene": gene_name,
@@ -153,6 +167,7 @@ def harmonic_fit_genes(
 
             results_list.append(result_dict)
             pvals.append(pval)
+            bics.append(delta_bic)
 
         except Exception as e:
             print(f"Warning: Could not fit model for gene {gene_name}: {str(e)}")
@@ -171,9 +186,12 @@ def harmonic_fit_genes(
     params_g = pd.DataFrame(results_list)
     params_g = params_g.set_index("gene")
 
-    # Add p-values
-    params_g["pvalue"] = pvals
+    # adjust p-values for multiple testing
+    pvals = np.array(pvals)
+    # pvals = sm.stats.multipletests(pvals, method="fdr_bh")[1]
 
+    params_g["pvalue"] = pvals
+    params_g["bic"] = bics
     params_g["amp"] = np.sqrt(params_g["a_g"] ** 2 + params_g["b_g"] ** 2)
     params_g["phase"] = np.arctan2(params_g["b_g"], params_g["a_g"]) % (2 * np.pi)
 

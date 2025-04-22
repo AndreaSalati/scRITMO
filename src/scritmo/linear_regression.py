@@ -2,6 +2,205 @@ import numpy as np
 from .basics import BIC
 import scipy.stats as stats
 import pandas as pd
+from statsmodels.tools.tools import add_constant
+import statsmodels.api as sm
+from tqdm import tqdm
+
+
+def create_harmonic_design_matrix(phases, n_harmonics=1, add_intercept=True):
+    """
+    Constructs a design matrix for harmonic regression with multiple harmonics.
+
+    Parameters:
+    -----------
+    phases : array-like
+        Vector of phases in radians (0 to 2π)
+    n_harmonics : int, default=1
+        Number of harmonics to include in the model
+    add_intercept : bool, default=True
+        Whether to add an intercept (constant) term to the design matrix
+
+    Returns:
+    --------
+    X : numpy.ndarray or pandas.DataFrame
+        Design matrix with columns for each harmonic (cos1, sin1, cos2, sin2, etc.)
+        If add_intercept is True, the last column will be the intercept term.
+    """
+    phases = np.asarray(phases)
+    n_samples = len(phases)
+
+    # Initialize matrix with 2 columns per harmonic
+    X = np.zeros((n_samples, 2 * n_harmonics))
+
+    # Populate matrix with cos and sin terms for each harmonic
+    for h in range(1, n_harmonics + 1):
+        X[:, 2 * (h - 1)] = np.cos(h * phases)  # Cosine terms
+        X[:, 2 * (h - 1) + 1] = np.sin(h * phases)  # Sine terms
+
+    # Add column names
+    column_names = []
+    for h in range(1, n_harmonics + 1):
+        column_names.extend([f"cos{h}", f"sin{h}"])
+
+    # Convert to DataFrame with named columns
+    X_df = pd.DataFrame(X, columns=column_names)
+
+    if add_intercept:
+        X_df = add_constant(X_df, prepend=False)
+
+    return X_df
+
+
+def harmonic_regression_adata(
+    adata, genes, phases, layer=None, n_harmonics=1, return_full_results=False
+):
+    """
+    Performs harmonic regression using OLS on genes in an AnnData object and computes
+    statistics comparing against a flat model.
+
+    Parameters:
+    -----------
+    adata : AnnData
+        AnnData object containing log-transformed gene expression data
+    genes : list
+        List of gene names to analyze
+    phases : array-like
+        Vector of phases in radians (0 to 2π) for each cell/sample
+    layer : str, optional
+        Layer in AnnData to use. If None, uses .X
+    n_harmonics : int, default=1
+        Number of harmonics to include in the model
+    return_full_results : bool, default=False
+        Whether to return full regression results for each gene
+
+    Returns:
+    --------
+    results_df : pandas.DataFrame
+        DataFrame containing regression results with the following columns:
+        - gene: Gene name
+        - a_g, b_g, m_g: Coefficients for cos, sin, and intercept
+        - pvalue: P-value from likelihood ratio test vs. flat model
+        - padj: Adjusted p-value (Benjamini-Hochberg)
+        - BIC: BIC difference between harmonic and flat models
+        - amplitude: Amplitude of the first harmonic
+        - phase: Phase of the first harmonic
+        - rsquared: R-squared value for the model
+
+    full_results : dict, optional
+        Dictionary with gene names as keys and full regression result objects as values
+        (only returned if return_full_results=True)
+    """
+    # Create design matrices
+    X_harmonic = create_harmonic_design_matrix(phases, n_harmonics)
+    X_flat = create_harmonic_design_matrix(phases, 0)  # Just the intercept
+
+    # Filter genes to ensure they exist in the dataset
+    genes = [g for g in genes if g in adata.var_names]
+
+    results_list = []
+    full_results_dict = {}
+
+    # tqdm is used to show progress
+    for gene in tqdm(genes, desc="Fitting genes", unit="gene"):
+        # Extract gene expression
+        if layer is None:
+            y = (
+                adata[:, gene].X.toarray().flatten()
+                if hasattr(adata[:, gene].X, "toarray")
+                else adata[:, gene].X
+            )
+        else:
+            y = (
+                adata[:, gene].layers[layer].toarray().flatten()
+                if hasattr(adata[:, gene].layers[layer], "toarray")
+                else adata[:, gene].layers[layer]
+            )
+
+        # Fit harmonic model using OLS
+        harmonic_model = sm.OLS(y, X_harmonic)
+        flat_model = sm.OLS(y, X_flat)
+
+        try:
+            harmonic_fit = harmonic_model.fit()
+            flat_fit = flat_model.fit()
+
+            # Store full results if requested
+            if return_full_results:
+                full_results_dict[gene] = harmonic_fit
+
+            # Likelihood ratio test for p-value
+            # For OLS, we can use F-test or directly compare RSS
+            n = len(y)
+            df_harmonic = X_harmonic.shape[1]
+            df_flat = X_flat.shape[1]
+            df_diff = df_harmonic - df_flat
+
+            rss_harmonic = harmonic_fit.ssr
+            rss_flat = flat_fit.ssr
+
+            f_stat = ((rss_flat - rss_harmonic) / df_diff) / (
+                rss_harmonic / (n - df_harmonic)
+            )
+            pvalue = 1 - stats.f.cdf(f_stat, df_diff, n - df_harmonic)
+
+            # Calculate BIC difference
+            bic_diff = (
+                flat_fit.bic - harmonic_fit.bic
+            )  # Positive value means harmonic model is better
+
+            # Extract parameters for first harmonic
+            params = harmonic_fit.params
+
+            # For the standard form (first harmonic only): y ~ a_g * cos(phi) + b_g * sin(phi) + m_g
+            if n_harmonics >= 1:
+                a_g = params[X_harmonic.columns.get_loc("cos1")]
+                b_g = params[X_harmonic.columns.get_loc("sin1")]
+
+                amplitude = np.sqrt(a_g**2 + b_g**2)
+                phase = np.arctan2(b_g, a_g) % (2 * np.pi)
+            else:
+                a_g = 0
+                b_g = 0
+                amplitude = 0
+                phase = 0
+
+            # Get intercept
+            if "const" in X_harmonic.columns:
+                m_g = params[X_harmonic.columns.get_loc("const")]
+            else:
+                m_g = y.mean()
+
+            # Compile results
+            result = {
+                "gene": gene,
+                "a_g": a_g,
+                "b_g": b_g,
+                "m_g": m_g,
+                "pvalue": pvalue,
+                "BIC": bic_diff,
+                "amp": amplitude,
+                "phase": phase,
+                "R2": harmonic_fit.rsquared,
+            }
+
+            results_list.append(result)
+
+        except Exception as e:
+            print(f"Error fitting model for gene {gene}: {str(e)}")
+
+    # Create results DataFrame
+    results_df = pd.DataFrame(results_list)
+
+    # Adjust p-values for multiple testing (Benjamini-Hochberg)
+    if len(results_list) > 0:
+        results_df["pvalue_correctedBH"] = benjamini_hochberg_correction(
+            results_df["pvalue"].values
+        )
+
+    if return_full_results:
+        return results_df, full_results_dict
+    else:
+        return results_df
 
 
 def harmonic_regression(t, y, omega=1):

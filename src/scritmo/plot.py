@@ -6,6 +6,15 @@ from scritmo.linear_regression import polar_genes_pandas
 from .basics import w, rh
 
 
+def xy():
+    plt.axline(
+        (0, 0),
+        slope=1,
+        color="red",
+        linestyle="--",
+    )
+
+
 def polar_plot(title="", inner_ring_size=0):
     """
     This function returns the ax object that can be used to plot the polar plot
@@ -87,7 +96,9 @@ def plot_count_histo(x, normalize=False, **kwargs):
     plt.bar(bin_x, bin_y, width=0.9, align="center", **kwargs)
 
 
-def polar_plot_params_g(df, genes_to_plot=None, title="", amp_lim=0.5, cartesian=False):
+def polar_plot_params_g(
+    df, genes_to_plot=None, title="", amp_lim=0.5, cartesian=False, s=20, fontisize=12
+):
     """
     Takes as input a pandas dataframe with columns "amp", "phase", "mu"
     and plots the genes in a polar plot
@@ -106,11 +117,11 @@ def polar_plot_params_g(df, genes_to_plot=None, title="", amp_lim=0.5, cartesian
         if gene not in genes_to_plot:
             continue
         amp, phase, mu = df.iloc[j, 0:3]
-        ax.scatter(phase, amp)
+        ax.scatter(phase, amp, s=s)
         # annotate
         if amp < amp_lim:
             continue
-        ax.annotate(gene, (phase, amp))
+        ax.annotate(gene, (phase, amp), fontsize=fontisize)
 
 
 # def integrated_std_histo(v, tr_vec=None):
@@ -226,6 +237,7 @@ def plot_circadian_data(
     layer="spliced",
     n_bins=None,
     alpha=0.7,
+    log_bin_y=False,
 ):
     if ax is None:
         fig, ax = plt.subplots()
@@ -241,7 +253,8 @@ def plot_circadian_data(
         # Bin the data
         bin_edges = np.linspace(0, 2 * np.pi, n_bins + 1)
         bin_indices = np.digitize(phis, bin_edges) - 1
-        bin_indices[bin_indices == n_bins] = 0  # Wrap around for circular data
+        # Wrap around for circular data
+        bin_indices[bin_indices == n_bins] = 0
 
         # Calculate the center of each bin
         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
@@ -257,6 +270,8 @@ def plot_circadian_data(
 
         # Plot binned data
         valid_bins = ~np.isnan(binned_expr)
+        if log_bin_y:
+            binned_expr[valid_bins] = np.log(binned_expr[valid_bins])
         ax.scatter(
             bin_centers[valid_bins] * rh,
             binned_expr[valid_bins],
@@ -272,7 +287,6 @@ def plot_circadian_data(
             expression,
             s=5,
             label="data",
-            c=adata.obs.ZTmod,
             alpha=alpha,
         )
 
@@ -294,6 +308,9 @@ def plot_circadian_data_and_fit(
     layer="spliced",
     n_bins=None,
     alpha=0.7,
+    line_color="red",
+    log_bin_y=False,
+    exp=True,
 ):
     """
     Creates a plot of circadian expression data and GLM fit, returning an axis object.
@@ -314,7 +331,14 @@ def plot_circadian_data_and_fit(
     """
     # First plot the data points using plot_circadian_data
     ax = plot_circadian_data(
-        adata, phis, g, ax=ax, layer=layer, n_bins=n_bins, alpha=alpha
+        adata,
+        phis,
+        g,
+        ax=ax,
+        layer=layer,
+        n_bins=n_bins,
+        alpha=alpha,
+        log_bin_y=log_bin_y,
     )
 
     # Now add the GLM fit
@@ -322,12 +346,20 @@ def plot_circadian_data_and_fit(
     rh = w**-1
     phi_x = np.linspace(0, 2 * np.pi, 100)
 
-    ax.plot(
-        phi_x * rh,
-        harmonic_function_exp(phi_x * rh, params_g.loc[g][:3], omega=w),
-        c="red",
-        label="GLM fit",
-    )
+    if exp:
+        ax.plot(
+            phi_x * rh,
+            harmonic_function_exp(phi_x * rh, params_g.loc[g][:3], omega=w),
+            c=line_color,
+            label="GLM fit",
+        )
+    else:
+        ax.plot(
+            phi_x * rh,
+            harmonic_function(phi_x * rh, params_g.loc[g][:3], omega=w),
+            c=line_color,
+            label="GLM fit",
+        )
 
     # Update legend since we've added a new line
     ax.legend()

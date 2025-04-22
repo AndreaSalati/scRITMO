@@ -52,7 +52,7 @@ def circular_sqrt_mean_squared_error(x, y, period):
     return np.sqrt(np.mean(v**2))
 
 
-def optimal_shift(p, p0, n_s=200):
+def optimal_shift(p, p0, n_s=200, return_shift=False):
     """
     Aligns two sequences defined on the unit circle, taking care of the periodicity
     and the flipping symmetry of the circle.
@@ -103,11 +103,17 @@ def optimal_shift(p, p0, n_s=200):
     if mad < mad_neg:
         phi_aligned = theta_cs[:, best_shift_ind]
         best_mad = mad
+        best_shift = shifts[best_shift_ind]
     else:
+        print("Flipping occured")
         phi_aligned = theta_cs_neg[:, best_shift_ind_neg]
         best_mad = mad_neg
+        best_shift = shifts[best_shift_ind_neg]
 
-    return phi_aligned, best_mad
+    if return_shift:
+        return phi_aligned, best_mad, best_shift
+    else:
+        return phi_aligned, best_mad
 
 
 # used for Differential Expression part
