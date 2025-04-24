@@ -98,10 +98,10 @@ def glm_gene_fit(
             counts = total_counts
 
     # Create design matrix
-    X = create_harmonic_design_matrix(phases, n_harmonics=n_harmonics)
+    X = create_harmonic_design_matrix(phases.squeeze(), n_harmonics=n_harmonics)
 
     # Design matrix for null model (intercept only)
-    X_null = create_harmonic_design_matrix(phases, 0)
+    X_null = create_harmonic_design_matrix(phases.squeeze(), 0)
 
     # Fit models for each gene
     results_list = []
@@ -195,7 +195,7 @@ def glm_gene_fit(
     # pvals = sm.stats.multipletests(pvals, method="fdr_bh")[1]
 
     params_g["pvalue"] = pvals
-    params_g["bic"] = bics
+    params_g["BIC"] = bics
     params_g["amp"] = np.sqrt(params_g["a_g"] ** 2 + params_g["b_g"] ** 2)
     params_g["phase"] = np.arctan2(params_g["b_g"], params_g["a_g"]) % (2 * np.pi)
 
