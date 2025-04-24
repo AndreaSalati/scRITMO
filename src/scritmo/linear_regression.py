@@ -52,7 +52,11 @@ def create_harmonic_design_matrix(phases, n_harmonics=1, add_intercept=True):
 
 
 def harmonic_regression_adata(
-    adata, genes, phases, layer=None, n_harmonics=1, return_full_results=False
+    adata,
+    genes,
+    phases,
+    layer=None,
+    n_harmonics=1,
 ):
     """
     Performs harmonic regression using OLS on genes in an AnnData object and computes
@@ -98,7 +102,6 @@ def harmonic_regression_adata(
     genes = [g for g in genes if g in adata.var_names]
 
     results_list = []
-    full_results_dict = {}
 
     # tqdm is used to show progress
     for gene in tqdm(genes, desc="Fitting genes", unit="gene"):
@@ -123,10 +126,6 @@ def harmonic_regression_adata(
         try:
             harmonic_fit = harmonic_model.fit()
             flat_fit = flat_model.fit()
-
-            # Store full results if requested
-            if return_full_results:
-                full_results_dict[gene] = harmonic_fit
 
             # Likelihood ratio test for p-value
             # For OLS, we can use F-test or directly compare RSS
@@ -190,6 +189,8 @@ def harmonic_regression_adata(
 
     # Create results DataFrame
     results_df = pd.DataFrame(results_list)
+    # columns gene as index
+    results_df.set_index("gene", inplace=True)
 
     # Adjust p-values for multiple testing (Benjamini-Hochberg)
     if len(results_list) > 0:
@@ -197,10 +198,7 @@ def harmonic_regression_adata(
             results_df["pvalue"].values
         )
 
-    if return_full_results:
-        return results_df, full_results_dict
-    else:
-        return results_df
+    return results_df
 
 
 def harmonic_regression(t, y, omega=1):
