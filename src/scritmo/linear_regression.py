@@ -144,7 +144,7 @@ def harmonic_regression_adata(
 
             # Calculate BIC difference
             bic_diff = (
-                flat_fit.bic - harmonic_fit.bic
+                harmonic_fit.bic - flat_fit.bic
             )  # Positive value means harmonic model is better
 
             # Extract parameters for first harmonic

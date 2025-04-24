@@ -6,11 +6,18 @@ import statsmodels.api as sm
 from statsmodels.discrete.discrete_model import NegativeBinomial
 from scipy.stats import chi2
 from tqdm import tqdm
-from scritmo import create_harmonic_design_matrix
+from scritmo import create_harmonic_design_matrix, benjamini_hochberg_correction
 
 
-def harmonic_fit_genes(
-    data, phases, genes=None, counts=None, fixed_disp=0.1, fit_disp=False, layer=None
+def glm_gene_fit(
+    data,
+    phases,
+    genes=None,
+    counts=None,
+    fixed_disp=0.1,
+    fit_disp=False,
+    layer=None,
+    n_harmonics=1,
 ):
     """
     Fits gene expression data to a harmonic model using statsmodels.
@@ -49,12 +56,9 @@ def harmonic_fit_genes(
         - m_g: intercept
         - disp: dispersion parameter (if fit_disp=True)
         - pvalue: significance of rhythmicity
-    params_g_pol : pandas.DataFrame
-        DataFrame with polar parameters for each gene:
-        - amp: amplitude
-        - phase: phase
-        - mean: mean expression level
-        - disp: dispersion parameter
+        - bic: Bayesian Information Criterion for model selection
+        - amp: amplitude of the fitted curve
+        - phase: phase of the fitted curve
     """
 
     # Get gene list
@@ -94,13 +98,10 @@ def harmonic_fit_genes(
             counts = total_counts
 
     # Create design matrix
-    X = np.ones((data_c.shape[0], 3))
-    X = pd.DataFrame(X, columns=["cos", "sin", "intercept"])
-    X.cos = np.cos(phases)
-    X.sin = np.sin(phases)
+    X = create_harmonic_design_matrix(phases, n_harmonics=n_harmonics)
 
     # Design matrix for null model (intercept only)
-    X_null = np.ones((phases.shape[0], 1))
+    X_null = create_harmonic_design_matrix(phases, 0)
 
     # Fit models for each gene
     results_list = []
@@ -111,7 +112,10 @@ def harmonic_fit_genes(
     for gene_index, gene_name in tqdm(
         enumerate(genes), total=len(genes), desc="Fitting genes"
     ):
-        # for gene_index, gene_name in enumerate(genes):
+        # In case I am using bulk data, which has a gene dependent offset
+        if type(counts) == pd.DataFrame:
+            counts = counts[gene_name].values
+
         # Extract the gene counts
         if isinstance(data, pd.DataFrame):
             gene_counts = data[gene_name].values
@@ -194,5 +198,9 @@ def harmonic_fit_genes(
     params_g["bic"] = bics
     params_g["amp"] = np.sqrt(params_g["a_g"] ** 2 + params_g["b_g"] ** 2)
     params_g["phase"] = np.arctan2(params_g["b_g"], params_g["a_g"]) % (2 * np.pi)
+
+    params_g["pvalue_correctedBH"] = benjamini_hochberg_correction(
+        params_g["pvalue"].values
+    )
 
     return params_g

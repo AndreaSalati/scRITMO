@@ -4,7 +4,7 @@ from .linear_regression import *
 from .plot import *
 from .pseudobulk import *
 from .gene_lists import *
-from .glm import harmonic_fit_genes
+from .glm import glm_gene_fit
 
 
 try:
