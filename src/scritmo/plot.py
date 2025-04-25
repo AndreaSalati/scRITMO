@@ -124,6 +124,34 @@ def polar_plot_params_g(
         ax.annotate(gene, (phase, amp), fontsize=fontisize)
 
 
+def polar_plot_params_g2(
+    df, genes_to_plot=None, title="", amp_lim=[0.0, 5.0], s=20, fontisize=12
+):
+    """
+    Takes as input a pandas dataframe with columns "amp", "phase"
+    doesn't metter the order of the columns
+    """
+    ax = polar_plot(title=title)
+
+    if genes_to_plot is None:
+        genes_to_plot = df.index
+
+    for j, gene in enumerate(df.index):
+
+        amp, phase = df[["amp", "phase"]].iloc[j]
+
+        if gene not in genes_to_plot:
+            continue
+
+        if amp < amp_lim[0] or amp > amp_lim[1]:
+            continue
+
+        ax.scatter(phase, amp, s=s)
+        # annotate
+
+        ax.annotate(gene, (phase, amp), fontsize=fontisize)
+
+
 # def integrated_std_histo(v, tr_vec=None):
 #     if tr_vec is None:
 #         tr_vec = np.linspace(0, 6, 100)
@@ -346,20 +374,17 @@ def plot_circadian_data_and_fit(
     rh = w**-1
     phi_x = np.linspace(0, 2 * np.pi, 100)
 
+    amp, phase, mu = params_g[["amp", "phase", "m_g"]].loc[g]
+    y = amp * np.cos(phi_x - phase) + mu
     if exp:
-        ax.plot(
-            phi_x * rh,
-            harmonic_function_exp(phi_x * rh, params_g.loc[g][:3], omega=w),
-            c=line_color,
-            label="GLM fit",
-        )
-    else:
-        ax.plot(
-            phi_x * rh,
-            harmonic_function(phi_x * rh, params_g.loc[g][:3], omega=w),
-            c=line_color,
-            label="GLM fit",
-        )
+        y = np.exp(y)
+
+    ax.plot(
+        phi_x * rh,
+        y,
+        c=line_color,
+        label="GLM fit",
+    )
 
     # Update legend since we've added a new line
     ax.legend()

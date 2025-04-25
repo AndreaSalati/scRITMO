@@ -1,6 +1,5 @@
 import numpy as np
 import scanpy as sc
-from scritmo import polar_genes_pandas
 import pandas as pd
 import statsmodels.api as sm
 from statsmodels.discrete.discrete_model import NegativeBinomial
@@ -42,21 +41,23 @@ def glm_gene_fit(
     fixed_disp : float, default=0.1
         Fixed dispersion parameter when fit_disp=False
     fit_disp : bool, default=False
-        Whether to fit the dispersion parameter (slower but more accurate)
+        Whether to fit the dispersion parameter, not really well supported yet
     layer : str, optional
         For AnnData input, specifies which layer to use (e.g., 'counts', 'spliced').
         If None, uses adata.X
+    n_harmonics : int, default=1
+        Number of harmonics to fit. 1 for cosine and sine, 2 for second harmonic, etc.
 
     Returns:
     --------
     params_g : pandas.DataFrame
         DataFrame with fitted parameters for each gene:
-        - a_g: coefficient for cos(phase)
-        - b_g: coefficient for sin(phase)
+        - a_i: coefficient for cos(phase)
+        - b_i: coefficient for sin(phase)
         - m_g: intercept
         - disp: dispersion parameter (if fit_disp=True)
         - pvalue: significance of rhythmicity
-        - bic: Bayesian Information Criterion for model selection
+        - BIC: Bayesian Information Criterion for model selection
         - amp: amplitude of the fitted curve
         - phase: phase of the fitted curve
     """
@@ -105,8 +106,6 @@ def glm_gene_fit(
 
     # Fit models for each gene
     results_list = []
-    pvals = []
-    bics = []
 
     # loop with tqdm for progress bar
     for gene_index, gene_name in tqdm(
@@ -156,51 +155,136 @@ def glm_gene_fit(
             )
             delta_bic = bic - bic_null
 
-            # Store the results
-            result_dict = {
-                "gene": gene_name,
-                "a_g": result.params.iloc[0],
-                "b_g": result.params.iloc[1],
-                "m_g": result.params.iloc[2],
-            }
+            # Store the results dynamically based on number of harmonics
+            result_dict = {"gene": gene_name}
+
+            # Extract all parameters except dispersion (if fitted) and name them
+            param_values = result.params[:-1] if fit_disp else result.params
+            m_g = param_values.iloc[-1]  # Intercept is the last before dispersion
+            result_dict["m_g"] = m_g
+
+            # Loop through harmonics to assign a_k and b_k dynamically
+            for h in range(1, n_harmonics + 1):
+                a_index = (h - 1) * 2
+                b_index = a_index + 1
+                if a_index < len(param_values):
+                    result_dict[f"a_{h}"] = param_values.iloc[a_index]
+                if b_index < len(param_values):
+                    result_dict[f"b_{h}"] = param_values.iloc[b_index]
 
             if fit_disp:
+                # fix this line!
                 result_dict["disp"] = result.params.iloc[3]
             else:
                 result_dict["disp"] = fixed_disp
 
+            result_dict["BIC"] = delta_bic
+            result_dict["pvalue"] = pval
             results_list.append(result_dict)
-            pvals.append(pval)
-            bics.append(delta_bic)
 
         except Exception as e:
             print(f"Warning: Could not fit model for gene {gene_name}: {str(e)}")
-            # Add a placeholder with NaN values
-            result_dict = {
-                "gene": gene_name,
-                "a_g": np.nan,
-                "b_g": np.nan,
-                "m_g": np.nan,
-                "disp": np.nan if fit_disp else fixed_disp,
-            }
+            # Add a placeholder with NaN values for each harmonic parameter
+            result_dict = {"gene": gene_name}
+            for h in range(1, n_harmonics + 1):
+                result_dict[f"a_{h}"] = np.nan
+                result_dict[f"b_{h}"] = np.nan
+            result_dict["m_g"] = np.nan
+            result_dict["disp"] = np.nan if fit_disp else fixed_disp
+            result_dict["pvalue"] = np.nan
+            result_dict["BIC"] = np.nan
             results_list.append(result_dict)
-            pvals.append(np.nan)
+            continue
 
     # Convert results to DataFrame
     params_g = pd.DataFrame(results_list)
     params_g = params_g.set_index("gene")
 
     # adjust p-values for multiple testing
-    pvals = np.array(pvals)
-    # pvals = sm.stats.multipletests(pvals, method="fdr_bh")[1]
 
-    params_g["pvalue"] = pvals
-    params_g["BIC"] = bics
-    params_g["amp"] = np.sqrt(params_g["a_g"] ** 2 + params_g["b_g"] ** 2)
-    params_g["phase"] = np.arctan2(params_g["b_g"], params_g["a_g"]) % (2 * np.pi)
+    if n_harmonics == 1:
+        params_g["amp"] = np.sqrt(params_g["a_1"] ** 2 + params_g["b_1"] ** 2)
+        params_g["phase"] = np.arctan2(params_g["b_1"], params_g["a_1"]) % (2 * np.pi)
+
+    if n_harmonics > 1:
+        # Calculate amplitude and phase numerically for multi-harmonic
+        thetas = np.linspace(0, 2 * np.pi, 100)
+        amps = []
+        phases = []
+        for idx, row in params_g.iterrows():
+            profile = np.full_like(thetas, row["m_g"], dtype=float)
+            for h in range(1, n_harmonics + 1):
+                a = row.get(f"a_{h}", 0)
+                b = row.get(f"b_{h}", 0)
+                profile += a * np.cos(h * thetas) + b * np.sin(h * thetas)
+            amplitude = (profile.max() - profile.min()) / 2
+            phase = thetas[np.argmax(profile)]
+            amps.append(amplitude)
+            phases.append(phase)
+        params_g["amp"] = amps
+        params_g["phase"] = phases
 
     params_g["pvalue_correctedBH"] = benjamini_hochberg_correction(
         params_g["pvalue"].values
     )
 
     return params_g
+
+
+def create_harmonic_design_matrix(phases, n_harmonics=1, add_intercept=True):
+    """
+    Constructs a design matrix for harmonic regression with multiple harmonics.
+
+    Parameters:
+    -----------
+    phases : array-like
+        Vector of phases in radians (0 to 2π)
+    n_harmonics : int, default=1
+        Number of harmonics to include in the model
+    add_intercept : bool, default=True
+        Whether to add an intercept (constant) term to the design matrix
+
+    Returns:
+    --------
+    X : numpy.ndarray or pandas.DataFrame
+        Design matrix with columns for each harmonic (cos1, sin1, cos2, sin2, etc.)
+        If add_intercept is True, the last column will be the intercept term.
+    """
+    phases = np.asarray(phases)
+    n_samples = len(phases)
+
+    # Initialize matrix with 2 columns per harmonic
+    X = np.zeros((n_samples, 2 * n_harmonics))
+
+    # Populate matrix with cos and sin terms for each harmonic
+    for h in range(1, n_harmonics + 1):
+        X[:, 2 * (h - 1)] = np.cos(h * phases)  # Cosine terms
+        X[:, 2 * (h - 1) + 1] = np.sin(h * phases)  # Sine terms
+
+    # Add column names
+    column_names = []
+    for h in range(1, n_harmonics + 1):
+        column_names.extend([f"cos{h}", f"sin{h}"])
+
+    # Convert to DataFrame with named columns
+    X_df = pd.DataFrame(X, columns=column_names)
+
+    if add_intercept:
+        X_df = add_constant(X_df, prepend=False)
+
+    return X_df
+
+
+def benjamini_hochberg_correction(p_values):
+
+    p_values = np.array(p_values)
+    n = len(p_values)
+    sorted_indices = np.argsort(p_values)
+    sorted_p_values = p_values[sorted_indices]
+    corrected_p_values = np.empty(n)
+
+    # Apply the BH formula
+    for i, p in enumerate(sorted_p_values):
+        corrected_p_values[sorted_indices[i]] = min(p * n / (i + 1), 1.0)
+
+    return corrected_p_values
