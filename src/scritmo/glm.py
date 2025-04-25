@@ -5,6 +5,7 @@ import statsmodels.api as sm
 from statsmodels.discrete.discrete_model import NegativeBinomial
 from scipy.stats import chi2
 from tqdm import tqdm
+from statsmodels.tools import add_constant
 from scritmo import create_harmonic_design_matrix, benjamini_hochberg_correction
 
 
@@ -54,7 +55,7 @@ def glm_gene_fit(
         DataFrame with fitted parameters for each gene:
         - a_i: coefficient for cos(phase)
         - b_i: coefficient for sin(phase)
-        - m_g: intercept
+        - a_0: intercept
         - disp: dispersion parameter (if fit_disp=True)
         - pvalue: significance of rhythmicity
         - BIC: Bayesian Information Criterion for model selection
@@ -160,8 +161,8 @@ def glm_gene_fit(
 
             # Extract all parameters except dispersion (if fitted) and name them
             param_values = result.params[:-1] if fit_disp else result.params
-            m_g = param_values.iloc[-1]  # Intercept is the last before dispersion
-            result_dict["m_g"] = m_g
+            a_0 = param_values.iloc[-1]  # Intercept is the last before dispersion
+            result_dict["a_0"] = a_0
 
             # Loop through harmonics to assign a_k and b_k dynamically
             for h in range(1, n_harmonics + 1):
@@ -189,7 +190,7 @@ def glm_gene_fit(
             for h in range(1, n_harmonics + 1):
                 result_dict[f"a_{h}"] = np.nan
                 result_dict[f"b_{h}"] = np.nan
-            result_dict["m_g"] = np.nan
+            result_dict["a_0"] = np.nan
             result_dict["disp"] = np.nan if fit_disp else fixed_disp
             result_dict["pvalue"] = np.nan
             result_dict["BIC"] = np.nan
@@ -212,7 +213,7 @@ def glm_gene_fit(
         amps = []
         phases = []
         for idx, row in params_g.iterrows():
-            profile = np.full_like(thetas, row["m_g"], dtype=float)
+            profile = np.full_like(thetas, row["a_0"], dtype=float)
             for h in range(1, n_harmonics + 1):
                 a = row.get(f"a_{h}", 0)
                 b = row.get(f"b_{h}", 0)

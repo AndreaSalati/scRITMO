@@ -339,6 +339,7 @@ def plot_circadian_data_and_fit(
     line_color="red",
     log_bin_y=False,
     exp=True,
+    columns_names=["amp", "phase", "m_g"],
 ):
     """
     Creates a plot of circadian expression data and GLM fit, returning an axis object.
@@ -374,7 +375,7 @@ def plot_circadian_data_and_fit(
     rh = w**-1
     phi_x = np.linspace(0, 2 * np.pi, 100)
 
-    amp, phase, mu = params_g[["amp", "phase", "m_g"]].loc[g]
+    amp, phase, mu = params_g[columns_names].loc[g]
     y = amp * np.cos(phi_x - phase) + mu
     if exp:
         y = np.exp(y)
