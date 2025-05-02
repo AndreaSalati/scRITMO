@@ -5,6 +5,7 @@ from .plot import *
 from .pseudobulk import *
 from .gene_lists import *
 from .glm import glm_gene_fit
+from .beta import Beta
 
 
 try:

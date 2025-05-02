@@ -265,6 +265,7 @@ def plot_circadian_data(
     layer="spliced",
     n_bins=None,
     alpha=0.7,
+    s=1,
     log_bin_y=False,
 ):
     if ax is None:
@@ -303,7 +304,7 @@ def plot_circadian_data(
         ax.scatter(
             bin_centers[valid_bins] * rh,
             binned_expr[valid_bins],
-            s=20,
+            s=s,
             alpha=alpha,
             label="binned data",
             marker="o",
@@ -313,7 +314,7 @@ def plot_circadian_data(
         ax.scatter(
             phis * rh,
             expression,
-            s=5,
+            s=s,
             label="data",
             alpha=alpha,
         )
@@ -349,12 +350,16 @@ def plot_circadian_data_and_fit(
         adata (AnnData): AnnData object containing gene data.
         phis (array): Phase values for scatter plot.
         g (str): Gene name or index.
-        counts (array): Normalization counts for spliced layer data.
         params_g (DataFrame): Parameter dataframe for GLM fit.
         ax (matplotlib.axes._axes.Axes, optional): Axis to plot on. If None, creates a new one.
         layer (str): Layer of AnnData object to use. Default is "spliced".
         n_bins (int, optional): Number of bins to use for data. If None, no binning is performed.
-
+        alpha (float): Transparency level for scatter points.
+        line_color (str): Color for the GLM fit line.
+        log_bin_y (bool): If True, apply log transformation to binned y values.
+        exp (bool): If True, apply exponential transformation to GLM fit.
+        columns_names (list): Column names in params_g for amp, phase, and mu.
+        
     Returns:
         matplotlib.axes._axes.Axes: Axis object with the plot.
     """
