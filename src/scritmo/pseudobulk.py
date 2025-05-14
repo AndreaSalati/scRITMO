@@ -11,6 +11,7 @@ def pseudobulk_new(
     pseudobulk_layer="spliced",
     n_groups=1,
     keep_obs=["ZT", "ZTmod"],
+    add_layers=False,
 ):
     """
     This function implements the megacell pseudobulk strategy
@@ -30,6 +31,8 @@ def pseudobulk_new(
     - n_groups: number of groups to split the cells in each timepoint, it's a pseudo-pseudo-bulk
     - keep_obs: list of the obs columns to keep in the output, be careful that all cells
         in the same group have the same value for these columns!
+    - add_layers: Adds the normalized and log layers to the output, use only
+        if passign all genes when pseudobulking
     """
 
     groups = adata.obs.groupby(groupby_obs_list).groups
@@ -61,6 +64,11 @@ def pseudobulk_new(
     PB = sc.concat(PBS)
     PB.X = np.array(PB.X)
     PB.var_names = adata.var_names
+    PB.obs["counts"] = PB.X.sum(axis=1)
+
+    if add_layers:
+        PB.layers["norm"] = PB.X.copy()
+        PB.layers["norm"] = PB.layers["norm"] / PB.obs["counts"].values[:, None]
 
     return PB
 

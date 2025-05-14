@@ -175,12 +175,6 @@ class Beta(pd.DataFrame):
         Make a circular plot for the betas. Use the get_amp function to get the amplitude
         so that it works for all numbers of harmonics.
         """
-        # # get the beta values
-        # plt.subplot(121)
-        # plt.ylabel("a_0")
-        # plt.plot(self.index, self['a_0'], ".")
-        # # write labels vertically
-        # plt.xticks(rotation=90)
 
         amp_tmp = self.get_amp(nh=nh)
         # [y_mean, y_min, y_max, amp_abs, amp_fc, phi_peak]
@@ -250,6 +244,48 @@ class Beta(pd.DataFrame):
 
         plt.show()
 
+    def plot_circular2(
+        self,
+        genes_to_plot=None,
+        title="",
+        amp_lim=[0.0, 5.0],
+        s=20,
+        fontisize=12,
+        col_names=["amp_abs", "phi_peak"],
+    ):
+        """
+        Takes as input a pandas dataframe with columns "amp_abs", "phphi_peak"
+        doesn't metter the order of the columns
+        """
+
+        # polar plot stuff
+        plt.figure(figsize=(10, 10))
+        ax = plt.subplot(111, projection="polar")
+        ax.set_theta_zero_location("N")
+        ax.set_theta_direction(-1)
+        ax.set_rlabel_position(0)
+        ax.set_xticks(np.linspace(0, 2 * np.pi, 24, endpoint=False))
+        ax.set_xticklabels(np.arange(24))
+        ax.set_title(title)
+
+        if genes_to_plot is None:
+            genes_to_plot = self.index
+
+        for j, gene in enumerate(self.index):
+
+            amp, phase = self[col_names].iloc[j]
+
+            if gene not in genes_to_plot:
+                continue
+
+            if amp < amp_lim[0] or amp > amp_lim[1]:
+                continue
+
+            ax.scatter(phase, amp, s=s)
+            # annotate
+
+            ax.annotate(gene, (phase, amp), fontsize=fontisize)
+
     def plot_genes(self, nh=None, legend=True, exp_base=None):
         """
         plot the gene profiles
@@ -303,6 +339,13 @@ class Beta(pd.DataFrame):
                 self.iloc[:, 2 * i + 1 : 2 * i + 3].values @ rot.T
             )
             rot = rot @ rot
+
+
+        # Update phi_peak column if present
+        if "phi_peak" in self.columns:
+            self["phi_peak"] = (self["phi_peak"] + phi) % (2 * np.pi)
+
+        
         return self
 
     def rescale_amp(self, kappa):

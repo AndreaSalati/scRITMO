@@ -125,7 +125,13 @@ def polar_plot_params_g(
 
 
 def polar_plot_params_g2(
-    df, genes_to_plot=None, title="", amp_lim=[0.0, 5.0], s=20, fontisize=12
+    df,
+    genes_to_plot=None,
+    title="",
+    amp_lim=[0.0, 5.0],
+    s=20,
+    fontisize=12,
+    col_names=["amp", "phase"],
 ):
     """
     Takes as input a pandas dataframe with columns "amp", "phase"
@@ -138,7 +144,7 @@ def polar_plot_params_g2(
 
     for j, gene in enumerate(df.index):
 
-        amp, phase = df[["amp", "phase"]].iloc[j]
+        amp, phase = df[col_names].iloc[j]
 
         if gene not in genes_to_plot:
             continue
@@ -276,7 +282,10 @@ def plot_circadian_data(
     phi_x = np.linspace(0, 2 * np.pi, 100)
 
     # Get expression values
-    expression = adata[:, g].layers[layer].toarray().squeeze()
+    if layer is None:
+        expression = adata[:, g].X.toarray().squeeze()
+    else:
+        expression = adata[:, g].layers[layer].toarray().squeeze()
 
     if n_bins is not None:
         # Bin the data
@@ -341,6 +350,7 @@ def plot_circadian_data_and_fit(
     log_bin_y=False,
     exp=True,
     columns_names=["amp", "phase", "m_g"],
+    s=10,
 ):
     """
     Creates a plot of circadian expression data and GLM fit, returning an axis object.
@@ -359,7 +369,7 @@ def plot_circadian_data_and_fit(
         log_bin_y (bool): If True, apply log transformation to binned y values.
         exp (bool): If True, apply exponential transformation to GLM fit.
         columns_names (list): Column names in params_g for amp, phase, and mu.
-        
+
     Returns:
         matplotlib.axes._axes.Axes: Axis object with the plot.
     """
@@ -373,6 +383,7 @@ def plot_circadian_data_and_fit(
         n_bins=n_bins,
         alpha=alpha,
         log_bin_y=log_bin_y,
+        s=s,
     )
 
     # Now add the GLM fit
