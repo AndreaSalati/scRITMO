@@ -122,20 +122,6 @@ class Beta(pd.DataFrame):
 
         return self.loc[:, keep].copy()
 
-    def predict(self, phi, nh, exp_base=None):
-        """
-        Predict the values using the beta coefficients.
-        t: time points
-        """
-        beta = self.get_ab(nh)
-        nh = int((beta.shape[1] - 1) / 2)
-        X = make_X(phi, nh=nh)
-
-        if exp_base == None:
-            return X @ beta.T.values
-        else:
-            return exp_base ** (X @ beta.T.values)
-
     def get_amp(self, nh=None, Ndense=1000, inplace=False):
         """
         Get the amplitude of the beta values.
@@ -151,11 +137,12 @@ class Beta(pd.DataFrame):
             y_max = np.max(y_dense[:, gene])
             y_min = np.min(y_dense[:, gene])
             amp_abs = y_max - y_min
+            amp = amp_abs / 2
             amp_fc = y_max / y_min if y_min != 0 else np.inf
-            phi_peak = phi_dense[np.argmax(y_dense[:, gene])]
+            phase = phi_dense[np.argmax(y_dense[:, gene])]
 
-            out.append([y_mean, y_min, y_max, amp_abs, amp_fc, phi_peak])
-        cols = ["y_mean", "y_min", "y_max", "amp_abs", "amp_fc", "phi_peak"]
+            out.append([y_mean, y_min, y_max, amp_abs, amp_fc, phase, amp])
+        cols = ["y_mean", "y_min", "y_max", "amp_abs", "amp_fc", "phase", "amp"]
 
         out_df = pd.DataFrame(out, columns=cols, index=self.index)
 
@@ -251,7 +238,7 @@ class Beta(pd.DataFrame):
         amp_lim=[0.0, 5.0],
         s=20,
         fontisize=12,
-        col_names=["amp_abs", "phi_peak"],
+        col_names=["amp", "phase"],
     ):
         """
         Takes as input a pandas dataframe with columns "amp_abs", "phphi_peak"
@@ -285,6 +272,23 @@ class Beta(pd.DataFrame):
             # annotate
 
             ax.annotate(gene, (phase, amp), fontsize=fontisize)
+
+    def plot_means(self):
+        """
+        Plots barplots of the means (a_0), ordered by value
+        """
+
+        # get the means
+        means = self.a_0
+        # sort the means
+        means = means.sort_values(ascending=False)
+        # plot the means
+        plt.bar(means.index, means.values)
+        plt.xticks(rotation=90)
+        plt.xlabel("Gene")
+        plt.ylabel("Mean")
+        # plt.title("Means of the beta values")
+        plt.show()
 
     def plot_genes(self, nh=None, legend=True, exp_base=None):
         """
@@ -340,12 +344,10 @@ class Beta(pd.DataFrame):
             )
             rot = rot @ rot
 
-
         # Update phi_peak column if present
-        if "phi_peak" in self.columns:
-            self["phi_peak"] = (self["phi_peak"] + phi) % (2 * np.pi)
+        if "phase" in self.columns:
+            self["phase"] = (self["phase"] + phi) % (2 * np.pi)
 
-        
         return self
 
     def rescale_amp(self, kappa):
@@ -378,6 +380,7 @@ class Beta(pd.DataFrame):
             # compute the score
             score = np.sum((beta_rot.values / amp1 - beta_ref.values / amp2) ** 2)
             scores.append(score)
+            
         # find the minimum score
         min_phi = phis[np.argmin(scores)]
         # rotate the beta values to the minimum score
@@ -403,14 +406,3 @@ def make_X(phi, nh):
         X.append(np.cos((n + 1) * phi))
         X.append(np.sin((n + 1) * phi))
     return np.array(X).T
-
-
-# # coeff = pd.DataFrame(coeff, index=["gene1", "gene2", "gene3"])
-# path = "/Users/salati/Documents/CODE/github/scCircadianMeta/data/fourier_coeffs/zhang_liver.csv"
-
-# beta = Beta(data=path)
-
-# beta.convert_old_notation()
-
-# beta.get_amp(inplace=True)
-# beta
