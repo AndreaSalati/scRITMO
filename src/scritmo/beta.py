@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
+import re
+
 
 
 class Beta(pd.DataFrame):
@@ -9,6 +11,12 @@ class Beta(pd.DataFrame):
     Class to handle the beta values with different harmonics.
     The columns are assumed to be ordered as "a_0", "a_1", "b_1", "a_2", "b_2", etc.
     """
+
+    # tell pandas how to construct new instances of *this* class
+    @property
+    def _constructor(self):
+        # note: you could also write: return Beta
+        return lambda *args, **kwargs: Beta(*args, **kwargs)
 
     def __init__(self, data=None, **kwargs):
         """
@@ -122,6 +130,20 @@ class Beta(pd.DataFrame):
 
         return self.loc[:, keep].copy()
 
+    def predict(self, phi, nh, exp_base=None):
+        """
+        Predict the values using the beta coefficients.
+        t: time points
+        """
+        beta = self.get_ab(nh)
+        nh = int((beta.shape[1] - 1) / 2)
+        X = make_X(phi, nh=nh)
+
+        if exp_base == None:
+            return X @ beta.T.values
+        else:
+            return exp_base ** (X @ beta.T.values)
+
     def get_amp(self, nh=None, Ndense=1000, inplace=False):
         """
         Get the amplitude of the beta values.
@@ -152,7 +174,8 @@ class Beta(pd.DataFrame):
             self["y_max"] = out_df["y_max"]
             self["amp_abs"] = out_df["amp_abs"]
             self["amp_fc"] = out_df["amp_fc"]
-            self["phi_peak"] = out_df["phi_peak"]
+            self["phase"] = out_df["phase"]
+            self["amp"] = out_df["amp"]
             return
         else:
             return out_df
@@ -316,6 +339,32 @@ class Beta(pd.DataFrame):
         # get the number of harmonics
         nh = int((len(keep) - 1) / 2)
         return nh
+    
+    def add_harmonics(self, n_tot):
+        """
+        Ensure the DataFrame has harmonics 1…n_tot (i.e. columns a_k, b_k for k=1..n_tot).
+        If you already have nh = self.num_harmonics(), then this adds only
+        the missing ones, and does nothing if nh >= n_tot.
+        """
+        nh = self.num_harmonics()   # how many harmonics you currently have
+        # how many new ones to add
+        n_new = n_tot - nh
+        if n_new <= 0:
+            # nothing to do: already have at least n_tot harmonics
+            return self
+
+        # indices of the new harmonics to add: (nh+1) … n_tot
+        new_idx = np.arange(nh + 1, n_tot + 1)
+
+        # build the new column names: a_{k}, b_{k} for each k
+        new_cols = [name for k in new_idx for name in (f"a_{k}", f"b_{k}")]
+
+        # add them filled with zeros
+        for col in new_cols:
+            self[col] = 0.0
+
+        # reorder
+        self.sort_data_metadata()
 
     def rotate(self, phi):
         """
@@ -348,7 +397,6 @@ class Beta(pd.DataFrame):
         if "phase" in self.columns:
             self["phase"] = (self["phase"] + phi) % (2 * np.pi)
 
-        return self
 
     def rescale_amp(self, kappa):
         """
@@ -380,7 +428,7 @@ class Beta(pd.DataFrame):
             # compute the score
             score = np.sum((beta_rot.values / amp1 - beta_ref.values / amp2) ** 2)
             scores.append(score)
-            
+
         # find the minimum score
         min_phi = phis[np.argmin(scores)]
         # rotate the beta values to the minimum score
@@ -394,6 +442,56 @@ class Beta(pd.DataFrame):
         """
         data = super().copy(deep=deep)
         return Beta(data)
+    
+    def sort_data_metadata(self):
+        """
+        Reorder columns so that:
+          1) all 'data' columns (a_k, b_k) come first, sorted by (k, letter)
+          2) all other 'metadata' columns follow in their original relative order
+        Returns a new Beta with columns reordered.
+        """
+
+        # 1) identify data columns via regex
+        data_cols = [c for c in self.columns if re.fullmatch(r"[ab]_[0-9]+", c)]
+
+        # 2) define a sort key: parse 'a_3' → (3, 'a'), 'b_12' → (12, 'b')
+        def _harmonic_key(col_name):
+            letter, idx = col_name.split("_")
+            return (int(idx), letter)
+
+        # 3) sort them
+        data_cols_sorted = sorted(data_cols, key=_harmonic_key)
+
+        # 4) metadata = everything else, in original order
+        meta_cols = [c for c in self.columns if c not in data_cols_sorted]
+
+        # 5) reindex and return
+        return self.reindex(columns=data_cols_sorted + meta_cols)
+
+    # def sort_data_metadata(self):
+    #     """
+    #     Reorder columns in place so that:
+    #     1) all 'data' columns (a_k, b_k) come first, sorted by (k, letter)
+    #     2) all other 'metadata' columns follow in their original relative order
+
+    #     Modifies self.columns directly and returns self for convenience.
+    #     """
+    #     # 1) pick up exactly a_#, b_# names
+    #     data_cols = [c for c in self.columns if re.fullmatch(r"[ab]_[0-9]+", c)]
+
+    #     # 2) sort by harmonic index, then letter
+    #     def _key(col):
+    #         letter, idx = col.split("_")
+    #         return (int(idx), letter)
+    #     data_cols_sorted = sorted(data_cols, key=_key)
+
+    #     # 3) metadata are everything else in original order
+    #     meta_cols = [c for c in self.columns if c not in data_cols_sorted]
+
+    #     # 4) reset the columns index in place
+    #     self.columns = data_cols_sorted + meta_cols
+
+    #     return self
 
 
 def make_X(phi, nh):
