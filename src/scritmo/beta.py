@@ -5,7 +5,6 @@ from pathlib import Path
 import re
 
 
-
 class Beta(pd.DataFrame):
     """
     Class to handle the beta values with different harmonics.
@@ -130,12 +129,12 @@ class Beta(pd.DataFrame):
 
         return self.loc[:, keep].copy()
 
-    def predict(self, phi, nh, exp_base=None):
+    def predict(self, phi, exp_base=None):
         """
         Predict the values using the beta coefficients.
         t: time points
         """
-        beta = self.get_ab(nh)
+        beta = self.get_ab(None)
         nh = int((beta.shape[1] - 1) / 2)
         X = make_X(phi, nh=nh)
 
@@ -144,14 +143,14 @@ class Beta(pd.DataFrame):
         else:
             return exp_base ** (X @ beta.T.values)
 
-    def get_amp(self, nh=None, Ndense=1000, inplace=False):
+    def get_amp(self, Ndense=1000, inplace=False):
         """
         Get the amplitude of the beta values.
         """
         if self is None:
             raise ValueError("Model is not fitted yet. Call fit() first.")
         phi_dense = np.linspace(0, 2 * np.pi, Ndense, endpoint=False)
-        y_dense = self.predict(phi_dense, nh=nh)
+        y_dense = self.predict(phi_dense)
 
         out = []
         for gene in range(y_dense.shape[1]):
@@ -318,7 +317,7 @@ class Beta(pd.DataFrame):
         plot the gene profiles
         """
         phi = np.linspace(0, 2 * np.pi, 100)
-        profiles = self.predict(phi, nh=nh, exp_base=exp_base)
+        profiles = self.predict(phi, exp_base=exp_base)
         plt.plot(phi, profiles)
         plt.xlabel("Phase")
         plt.ylabel("Gene profiles")
@@ -327,6 +326,37 @@ class Beta(pd.DataFrame):
             if legend
             else None
         )
+        plt.show()
+
+    def plot_gene(self, gene, exp_base=None, legend=True):
+        """
+        Plot the expression profile for a single gene over [0, 2π].
+        Args:
+            gene: gene name (index label) or integer index.
+            nh: number of harmonics.
+            exp_base: optional exponent base for predict.
+            legend: whether to show legend.
+        """
+        # Create a phase grid
+        phi = np.linspace(0, 2 * np.pi, 100)
+        # Predict profiles: shape (num_points, n_genes)
+        profiles = self.predict(phi, exp_base=exp_base)
+        # Resolve gene index
+        if isinstance(gene, str):
+            idx = list(self.index).index(gene)
+        else:
+            idx = int(gene)
+        # Extract profile for the specified gene
+        y = profiles[:, idx]
+        # Plot
+        plt.figure()
+        plt.plot(phi, y, label=str(gene))
+        plt.xlabel("Phase")
+        plt.ylabel("Expression")
+        plt.title(str(gene))
+        if legend:
+            plt.legend()
+        plt.tight_layout()
         plt.show()
 
     def num_harmonics(self):
@@ -339,14 +369,14 @@ class Beta(pd.DataFrame):
         # get the number of harmonics
         nh = int((len(keep) - 1) / 2)
         return nh
-    
+
     def add_harmonics(self, n_tot):
         """
         Ensure the DataFrame has harmonics 1…n_tot (i.e. columns a_k, b_k for k=1..n_tot).
         If you already have nh = self.num_harmonics(), then this adds only
         the missing ones, and does nothing if nh >= n_tot.
         """
-        nh = self.num_harmonics()   # how many harmonics you currently have
+        nh = self.num_harmonics()  # how many harmonics you currently have
         # how many new ones to add
         n_new = n_tot - nh
         if n_new <= 0:
@@ -397,7 +427,6 @@ class Beta(pd.DataFrame):
         if "phase" in self.columns:
             self["phase"] = (self["phase"] + phi) % (2 * np.pi)
 
-
     def rescale_amp(self, kappa):
         """
         Rescale the amplitude of the beta values.
@@ -442,7 +471,7 @@ class Beta(pd.DataFrame):
         """
         data = super().copy(deep=deep)
         return Beta(data)
-    
+
     def sort_data_metadata(self):
         """
         Reorder columns so that:

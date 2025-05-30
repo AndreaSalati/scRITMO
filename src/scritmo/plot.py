@@ -4,6 +4,10 @@ import matplotlib.pyplot as plt
 from .linear_regression import harmonic_function_exp, harmonic_function
 from scritmo.linear_regression import polar_genes_pandas
 from .basics import w, rh
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
 
 
 def xy():
@@ -407,3 +411,73 @@ def plot_circadian_data_and_fit(
     ax.legend()
 
     return ax
+
+
+def hexbin_with_marginals(
+    x,
+    y,
+    density="linear",  # 'linear'  or 'log'
+    gridsize=50,
+    hist_bins=50,
+    figsize=(8, 8),
+    cmap="viridis",
+):
+    """
+    Hex-bin joint plot with perfectly aligned marginal histograms.
+
+    Parameters
+    ----------
+    x, y       : 1-D array-likes
+    density    : 'linear' or 'log'   (colour scale for hexbin)
+    gridsize   : hexbin grid size
+    hist_bins  : #bins in marginal histograms
+    figsize    : figure size
+    cmap       : matplotlib colormap
+
+    Returns
+    -------
+    ax_joint   : main Axes (for titles / labels)
+    """
+    # Prepare ranges once so both hexbin & hist share them
+    pad = 1e-9
+    x_min, x_max = np.min(x) - pad, np.max(x) + pad
+    y_min, y_max = np.min(y) - pad, np.max(y) + pad
+    extent = (x_min, x_max, y_min, y_max)
+
+    bins_arg = "log" if density == "log" else None
+
+    # ── 1. Main axis ────────────────────────────────────────────────────
+    fig, ax_joint = plt.subplots(figsize=figsize)
+    divider = make_axes_locatable(ax_joint)
+
+    # ── 2. Attach marginal axes (share limits automatically) ───────────
+    ax_xhist = divider.append_axes("top", size=1.2, pad=0.1, sharex=ax_joint)
+    ax_yhist = divider.append_axes("right", size=1.2, pad=0.1, sharey=ax_joint)
+
+    # ── 3. Joint hex-bin ───────────────────────────────────────────────
+    hb = ax_joint.hexbin(
+        x,
+        y,
+        gridsize=gridsize,
+        bins=bins_arg,
+        cmap=cmap,
+        extent=extent,
+    )
+    ax_joint.set_xlim(x_min, x_max)
+    ax_joint.set_ylim(y_min, y_max)
+
+    # ── 4. Marginal histograms (exact same ranges) ─────────────────────
+    ax_xhist.hist(x, bins=hist_bins, range=(x_min, x_max), color="gray")
+    ax_yhist.hist(
+        y, bins=hist_bins, range=(y_min, y_max), orientation="horizontal", color="gray"
+    )
+
+    # tidy marginal axes
+    ax_xhist.tick_params(bottom=False, labelbottom=False)
+    ax_yhist.tick_params(left=False, labelleft=False)
+
+    # ── 5. Colour-bar ──────────────────────────────────────────────────
+    cb = fig.colorbar(hb, ax=ax_joint, pad=0.02)
+    cb.set_label("log10(N)" if density == "log" else "count")
+
+    return ax_joint
