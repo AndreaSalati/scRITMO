@@ -9,7 +9,6 @@ import matplotlib.gridspec as gridspec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
-
 def xy():
     plt.axline(
         (0, 0),
@@ -481,3 +480,65 @@ def hexbin_with_marginals(
     cb.set_label("log10(N)" if density == "log" else "count")
 
     return ax_joint
+
+
+def bin_data_simple(data, covariate, n_bins):
+    """
+    Bin an arbitrary data array according to a numeric covariate.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Either a 1-D array of length n_samples, or a 2-D array of shape (n_samples, n_features).
+    covariate : np.ndarray
+        A 1-D array of length n_samples, giving the continuous covariate for each sample.
+    n_bins : int
+        The number of equal-width bins to create along the range of `covariate`.
+
+    Returns
+    -------
+    bin_centers : np.ndarray, shape (n_bins,)
+        The center (midpoint) of each of the n_bins.
+    binned_means : np.ndarray
+        If data was 2-D of shape (n_samples, n_features), returns shape (n_bins, n_features),
+        where row k is the mean of data[samples_in_bin_k, :]. Bins with no samples are NaN.
+        If data was 1-D (length n_samples), returns shape (n_bins,) of means per bin.
+    """
+    # Convert data to 2D: (n_samples, n_features). If already 2D, this is a no-op.
+    arr = np.asarray(data)
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)  # now shape = (n_samples, 1)
+
+    n_samples, n_features = arr.shape
+
+    # Step 1: compute equally spaced bin edges over the covariate
+    cov = np.asarray(covariate)
+    if cov.ndim != 1 or cov.shape[0] != n_samples:
+        raise ValueError("covariate must be a 1D array of length n_samples")
+
+    cov_min, cov_max = cov.min(), cov.max()
+    bin_edges = np.linspace(cov_min, cov_max, n_bins + 1)
+
+    # Step 2: assign each sample to a bin
+    # np.digitize returns values in 1..(n_bins+1), so subtract 1 for 0..n_bins
+    bin_idx = np.digitize(cov, bin_edges) - 1
+    # If any covariate == cov_max, np.digitize will give index = n_bins, so wrap to n_bins - 1
+    bin_idx[bin_idx == n_bins] = n_bins - 1
+
+    # Step 3: compute bin centers
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+    # Step 4: allocate output array and fill by averaging
+    binned_means = np.full((n_bins, n_features), np.nan, dtype=float)
+    for k in range(n_bins):
+        mask = bin_idx == k
+        if np.any(mask):
+            # compute mean over axis=0 (i.e. over all samples in bin k)
+            binned_means[k, :] = arr[mask, :].mean(axis=0)
+        # else leave as NaN
+
+    # If original data was 1-D, return a 1-D array of length n_bins
+    if data.ndim == 1:
+        binned_means = binned_means.squeeze()  # shape (n_bins,)
+
+    return bin_centers, binned_means

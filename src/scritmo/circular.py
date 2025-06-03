@@ -82,7 +82,7 @@ def optimal_shift(p, p0, n_s=200, return_shift=False):
         return np.minimum(v1, v2)
 
     Nc = p.shape[0]
-    shifts = np.linspace(0, 2 * np.pi, n_s)
+    shifts = np.linspace(0, 2 * np.pi, n_s + 1)[:-1]
     # creating a matrix of all possible shifts
     theta_cs = (p.reshape(Nc, 1) - shifts.reshape(1, n_s)) % (2 * np.pi)
     theta_cs_neg = (-p.reshape(Nc, 1) - shifts.reshape(1, n_s)) % (2 * np.pi)
@@ -176,7 +176,6 @@ def compute_posterior_statistics(l_xc):
     To be sure that l_xc is a discrete pdf it re normalizes it.
     """
     l_xc = l_xc / l_xc.sum(axis=0)
-    # deltaH_c = np.apply_along_axis(delta_entropy, axis=0, arr=l_xc * delta_phi)
     post_mean_c = np.apply_along_axis(circ_mean_P, 0, l_xc)
     post_var_c = np.apply_along_axis(circ_var_P, 0, l_xc)
     post_std_c = np.apply_along_axis(circ_std_P, 0, l_xc)
@@ -187,7 +186,7 @@ def compute_posterior_statistics(l_xc):
 # posterior distribution of the phase
 def circ_mean_P(P):
 
-    phis = np.linspace(0, 2 * np.pi, P.shape[0])
+    phis = np.linspace(0, 2 * np.pi, P.shape[0] + 1)[:-1]
     # take complex arg of sum
     mu = np.angle(np.sum(np.exp(1j * phis) * P))
     return mu % (2 * np.pi)
@@ -195,7 +194,7 @@ def circ_mean_P(P):
 
 def circ_var_P(P):
 
-    phis = np.linspace(0, 2 * np.pi, P.shape[0])
+    phis = np.linspace(0, 2 * np.pi, P.shape[0] + 1)[:-1]
     # take complex arg of sum
     var = 1 - np.abs(np.sum(np.exp(1j * phis) * P))
     return var
@@ -203,7 +202,7 @@ def circ_var_P(P):
 
 def circ_std_P(P):
 
-    phis = np.linspace(0, 2 * np.pi, P.shape[0])
+    phis = np.linspace(0, 2 * np.pi, P.shape[0] + 1)[:-1]
     std = np.sqrt(-2 * np.log(np.abs(np.sum(np.exp(1j * phis) * P))))
     return std
 
@@ -215,7 +214,7 @@ def circ_mode(l_xc):
     to find the correct solution.
     """
     # for every cell get the argmax of the likelihood
-    phi_x = np.linspace(0, 2 * np.pi, l_xc.shape[0])
+    phi_x = np.linspace(0, 2 * np.pi, l_xc.shape[0] + 1)[:-1]
 
     phi_max_ind = np.argmax(l_xc, axis=0)
     # phi_max_ind = list(phi_max_ind)
