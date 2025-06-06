@@ -49,46 +49,90 @@ class Beta(pd.DataFrame):
         if mapping:
             self.rename(columns=mapping, inplace=True)
 
-    def get_ab(self, nh=None, keep_a_0=True):
+    def get_ab_column_names(self, nh=None, keep_a_0=True):
         """
-        Get the beta values from the DataFrame. I.e. get all the columns that start with "a_" or "b_".
-        nh: number of harmonics.
-        Stop when i reaches nh, e.g. return "a_0", "a_1", "b_1" if nh=1
+        Return a sorted list of column names that start with 'a_' or 'b_' up to harmonic nh.
+
+        Parameters
+        ----------
+        nh : int or None, default=None
+            If None, include all columns starting with 'a_' or 'b_'.
+            If >= 0, include only those whose index i (from 'a_i' or 'b_i') satisfies i <= nh.
+        keep_a_0 : bool, default=True
+            If False, drop 'a_0' from the returned list.
+
+        Returns
+        -------
+        keep : List[str]
+            Sorted column names of the form 'a_i' or 'b_i' (i = 0, 1, 2, …),
+            ordered first by i, then 'a' before 'b' for the same i.
+
+        Raises
+        ------
+        ValueError
+            If nh is not None and nh < 0, or if filtering leaves no columns.
         """
-        # get the columns that start with "a_i" or "b_i", but stop when i reaches nh, e.g. "a_0", "b_0", "a_1", "b_1" if nh=1
-        # if nh is None, get all the columns that start with "a_" or "b_"
+        # 1) Filter‐by‐prefix ('a_' or 'b_'), then by harmonic index if nh is given.
         if nh is None:
             keep = [
                 col
                 for col in self.columns
                 if col.startswith("a_") or col.startswith("b_")
             ]
-        elif nh > -1:
-            # i need a regex that matches "a_i" or "b_i" where i is a number from 0 to nh
-            keep = [
-                col
-                for col in self.columns
-                if (col.startswith("a_") or col.startswith("b_"))
-                and int(col.split("_")[1]) <= nh
-            ]
+        elif nh >= 0:
+            keep = []
+            for col in self.columns:
+                if not (col.startswith("a_") or col.startswith("b_")):
+                    continue
+                # split off the index part
+                try:
+                    idx = int(col.split("_", 1)[1])
+                except ValueError:
+                    # if the part after '_' isn't an integer, skip
+                    continue
+                if idx <= nh:
+                    keep.append(col)
         else:
-            raise ValueError("nh must be a positive integer or None")
+            raise ValueError("nh must be a non‐negative integer or None")
 
-        # if a0_only is True, only return the a_0 column
+        # 2) Optionally drop 'a_0'
         if not keep_a_0:
             keep = [col for col in keep if col != "a_0"]
 
         if len(keep) == 0:
             raise ValueError("no columns left after filtering")
 
-        # --- NEW REORDERING STEP ---
-        # Sort by harmonic index, then 'a' before 'b':
-        keep = sorted(
-            keep, key=lambda col: (int(col.split("_", 1)[1]), col.split("_", 1)[0])
+        # 3) Sort by (index, letter)
+        #    For each col like 'a_3' or 'b_1', split into (letter, idx)
+        keep_sorted = sorted(
+            keep,
+            key=lambda col: (
+                int(col.split("_", 1)[1]),  # harmonic index as integer
+                col.split("_", 1)[0],  # 'a' or 'b'
+            ),
         )
+        return keep_sorted
 
-        beta = self.loc[:, keep].copy()
-        return beta
+    def get_ab(self, nh=None, keep_a_0=True):
+        """
+        Return a copy of the subset of self containing only the 'a_i'/'b_i' columns
+        (up to harmonic nh), in the same sorted order as get_ab_column_names.
+
+        Parameters
+        ----------
+        nh : int or None, default=None
+            Passed through to get_ab_column_names.
+        keep_a_0 : bool, default=True
+            Passed through to get_ab_column_names.
+
+        Returns
+        -------
+        beta_df : pandas.DataFrame
+            A copy of the sliced DataFrame with only the requested columns.
+        """
+        cols_to_keep = self.get_ab_column_names(nh=nh, keep_a_0=keep_a_0)
+        # slice and return a copy
+        return self.loc[:, cols_to_keep].copy()
 
     def trace_det(self, nh=None):
         """
@@ -146,6 +190,9 @@ class Beta(pd.DataFrame):
     def get_amp(self, Ndense=1000, inplace=False):
         """
         Get the amplitude of the beta values.
+        Be ware if you fit was done in log and with which base:
+        log2fc assumes that the fit was done i, base e, and
+        converts it to log2
         """
         if self is None:
             raise ValueError("Model is not fitted yet. Call fit() first.")
@@ -159,11 +206,21 @@ class Beta(pd.DataFrame):
             y_min = np.min(y_dense[:, gene])
             amp_abs = y_max - y_min
             amp = amp_abs / 2
-            amp_fc = y_max / y_min if y_min != 0 else np.inf
+            # amp_fc = y_max / y_min if y_min != 0 else np.inf
+            amp
             phase = phi_dense[np.argmax(y_dense[:, gene])]
+            log2fc = np.log2(np.e) * 2 * amp
 
-            out.append([y_mean, y_min, y_max, amp_abs, amp_fc, phase, amp])
-        cols = ["y_mean", "y_min", "y_max", "amp_abs", "amp_fc", "phase", "amp"]
+            out.append([y_mean, y_min, y_max, amp_abs, phase, amp])
+        cols = [
+            "y_mean",
+            "y_min",
+            "y_max",
+            "amp_abs",
+            "phase",
+            "amp",
+            "log2fc",
+        ]
 
         out_df = pd.DataFrame(out, columns=cols, index=self.index)
 
@@ -175,6 +232,7 @@ class Beta(pd.DataFrame):
             self["amp_fc"] = out_df["amp_fc"]
             self["phase"] = out_df["phase"]
             self["amp"] = out_df["amp"]
+            self["log"]
             return
         else:
             return out_df
@@ -253,11 +311,18 @@ class Beta(pd.DataFrame):
 
         plt.show()
 
+    def get_log2fc(self):
+        """
+        This function converts the amplitudes from log_e
+        to log_2 (standard in the field).
+        """
+        pass
+
     def plot_circular2(
         self,
         genes_to_plot=None,
         title="",
-        amp_lim=[0.0, 5.0],
+        amp_lim=[0.0, 10.0],
         s=20,
         fontisize=12,
         col_names=["amp", "phase"],
