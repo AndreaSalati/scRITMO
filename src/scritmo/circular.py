@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.stats import circmean, circstd, circvar
+import pandas as pd
 
 
 # metrics to evaluate the performance of the model
@@ -52,7 +53,7 @@ def circular_sqrt_mean_squared_error(x, y, period):
     return np.sqrt(np.mean(v**2))
 
 
-def optimal_shift(p, p0, n_s=200, return_shift=False):
+def optimal_shift(p, p0, n_s=200, return_shift=False, return_shift_only=False):
     """
     Aligns two sequences defined on the unit circle, taking care of the periodicity
     and the flipping symmetry of the circle.
@@ -66,15 +67,12 @@ def optimal_shift(p, p0, n_s=200, return_shift=False):
     Returns:
     phi_aligned: the aligned phase array
     best_mad: the MAD of the best alignment
+    best_shift: the shift required to best align
     """
 
     def circular_deviation2(x, y, period=2 * np.pi):
         """
-        Function called by optimal_shift
-        Inputs:
-        x: phase array
-        y: phase array
-        period: period of the circular variable
+        gives difference in phases
         """
         x, y = x % period, y % period
         v1 = np.abs(x - y)
@@ -110,7 +108,9 @@ def optimal_shift(p, p0, n_s=200, return_shift=False):
         best_mad = mad_neg
         best_shift = shifts[best_shift_ind_neg]
 
-    if return_shift:
+    if return_shift_only:
+        return best_shift
+    elif return_shift:
         return phi_aligned, best_mad, best_shift
     else:
         return phi_aligned, best_mad
@@ -220,3 +220,22 @@ def circ_mode(l_xc):
     # phi_max_ind = list(phi_max_ind)
     phi_mode = phi_x[phi_max_ind]
     return phi_mode
+
+def get_shift_y(ext_time, ph, context):
+    """
+    This function aligns all cells beloging to the
+    same context class to the ext_time vector.
+    """
+    context_u = np.unique(context)
+    shift_y = pd.Series(index=context_u)
+
+    for i,ct in enumerate(context_u):
+        mask = context == ct
+        tp_ct = ext_time[mask]
+        delta = sr.optimal_shift(ph[mask], tp_ct, return_shift_only=True)
+        if delta > np.pi:
+            delta -= 2*np.pi
+        
+        shift_y[ct] = delta
+
+    return shift_y
