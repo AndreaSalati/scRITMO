@@ -10,7 +10,6 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from adjustText import adjust_text
 
 
-
 def xy():
     plt.axline(
         (0, 0),
@@ -44,14 +43,10 @@ def polar_plot(title="", inner_ring_size=0):
     return ax
 
 
-def polar_plot_shifts(
-    title: str = "",
-    inner_ring_size: float = 0,
-    angle: float = None
-):
+def polar_plot_shifts(title: str = "", inner_ring_size: float = 0, angle: float = None):
     """
-    Returns a polar-Axes in which the 24 hour‐ticks are labeled by their 
-    signed offsets from “midnight” (θ=0), and—if 'angle' is given—we only 
+    Returns a polar-Axes in which the 24 hour‐ticks are labeled by their
+    signed offsets from “midnight” (θ=0), and—if 'angle' is given—we only
     display the wedge θ ∈ [−angle/2, +angle/2].  The radial‐grid labels
     are placed on the LEFT boundary of that wedge.
 
@@ -67,7 +62,7 @@ def polar_plot_shifts(
         - If None, we show the full circle (no theta‐clipping).
         - If angle = π/2, we show only θ ∈ [−π/4, +π/4], i.e. ±3 h.
         - If angle = π, we show only θ ∈ [−π/2, +π/2], i.e. ±6 h.
-    
+
     Returns
     -------
     ax : matplotlib.axes._subplots.PolarAxesSubplot
@@ -75,11 +70,11 @@ def polar_plot_shifts(
     """
     plt.figure(figsize=(10, 10))
     ax = plt.subplot(111, projection="polar")
-    
+
     # 1) Put θ=0 at North, and make positive θ go *clockwise*:
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
-    
+
     # 2) Compute the 24 “signed” angles in [−π, +π]:
     #
     #    For each hour h = 0..23, the usual angle is
@@ -87,49 +82,51 @@ def polar_plot_shifts(
     #    We shift into [−π, +π] by:
     #       signed_angle_h = (θ_h + π) mod 2π  − π.
     #    That way, h=1 sits at +2π/24, h=23 sits at −2π/24, etc.
-    angles_abs    = np.linspace(0, 2*np.pi, 24, endpoint=False)
-    signed_angles = (angles_abs + np.pi) % (2*np.pi) - np.pi
-    
+    angles_abs = np.linspace(0, 2 * np.pi, 24, endpoint=False)
+    signed_angles = (angles_abs + np.pi) % (2 * np.pi) - np.pi
+
     # 3) Compute the signed‐hour label for each angle,
     #    rounding to the nearest integer instead of truncating:
-    raw_values    = signed_angles * (24.0 / (2*np.pi))
-    signed_hours  = np.round(raw_values).astype(int)
+    raw_values = signed_angles * (24.0 / (2 * np.pi))
+    signed_hours = np.round(raw_values).astype(int)
     # (Optional) If you’d prefer “+12” instead of “−12” at exactly θ=±π, you can do:
     signed_hours[signed_hours == -12] = 12
-    
+
     # 4) Sort by signed_angles so ticks go in increasing order from −π to +π:
-    idx                 = np.argsort(signed_angles)
+    idx = np.argsort(signed_angles)
     sorted_signed_angles = signed_angles[idx]
-    sorted_labels        = signed_hours[idx].astype(str)
-    
+    sorted_labels = signed_hours[idx].astype(str)
+
     # 5) Place those 24 ticks at the “signed” angles, labeling them by signed_hours:
     ax.set_xticks(sorted_signed_angles)
     ax.set_xticklabels(sorted_labels)
-    
+
     # 6) Add title & “inner ring”:
     ax.set_title(title)
     ax.set_rorigin(inner_ring_size)
-    
+
     # 7) If the user requested a finite wedge (angle != None):
     #       → Clip to θ ∈ [−angle/2, +angle/2].
     #       → Put r‐labels on the LEFT boundary of that wedge.
     if angle is not None:
         half = angle / 2.0
         ax.set_thetalim(-half, half)
-        
+
         # The left‐boundary is at θ = −half (in radians).
         # Convert to degrees, then place r‐labels there:
-        rlabel_deg = - (half * 180.0 / np.pi)
+        rlabel_deg = -(half * 180.0 / np.pi)
         ax.set_rlabel_position(rlabel_deg)
     else:
         # Full circle & r‐labels straight up at θ=0°:
         ax.set_rlabel_position(0)
-    
+
     ax.grid(True)
     return ax
 
 
-def scatter_with_labels(x, y, labels, fontsize=10, s=200, arrowstyle='-', color_arr='black'):
+def scatter_with_labels(
+    x, y, labels, fontsize=10, s=200, arrowstyle="-", color_arr="black"
+):
     """
     Plots a scatter and annotates it with non-overlapping labels.
 
@@ -144,6 +141,7 @@ def scatter_with_labels(x, y, labels, fontsize=10, s=200, arrowstyle='-', color_
     for xi, yi, label in zip(x, y, labels):
         texts.append(plt.text(xi, yi, label, fontsize=fontsize))
     adjust_text(texts, arrowprops=dict(arrowstyle=arrowstyle, color=color_arr, lw=0.5))
+
 
 def biplot(
     loadings,
@@ -455,7 +453,7 @@ def plot_circadian_data_and_fit(
     line_color="red",
     log_bin_y=False,
     exp=True,
-    columns_names=["amp", "phase", "m_g"],
+    columns_names=["amp", "phase", "a_0"],
     s=10,
 ):
     """

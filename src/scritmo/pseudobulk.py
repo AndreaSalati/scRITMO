@@ -88,7 +88,6 @@ def pseudo_bulk_time(adata, sample_obs="sample_name", ZT_obs="ZTmod", n_groups=1
     for i, s in enumerate(samples_u):
         time_sample = adata.obs[ZT_obs][samples == s].values
         ts = int(np.unique(time_sample)[0])
-
         sample_ZT[s] = ts
 
     if n_groups > 1:
