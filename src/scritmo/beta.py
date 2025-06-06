@@ -211,7 +211,7 @@ class Beta(pd.DataFrame):
             phase = phi_dense[np.argmax(y_dense[:, gene])]
             log2fc = np.log2(np.e) * 2 * amp
 
-            out.append([y_mean, y_min, y_max, amp_abs, phase, amp])
+            out.append([y_mean, y_min, y_max, amp_abs, phase, amp, log2fc])
         cols = [
             "y_mean",
             "y_min",
@@ -229,10 +229,9 @@ class Beta(pd.DataFrame):
             self["y_min"] = out_df["y_min"]
             self["y_max"] = out_df["y_max"]
             self["amp_abs"] = out_df["amp_abs"]
-            self["amp_fc"] = out_df["amp_fc"]
             self["phase"] = out_df["phase"]
             self["amp"] = out_df["amp"]
-            self["log"]
+            self["log2fc"] = out_df["log2fc"]
             return
         else:
             return out_df
@@ -598,3 +597,70 @@ def make_X(phi, nh):
         X.append(np.cos((n + 1) * phi))
         X.append(np.sin((n + 1) * phi))
     return np.array(X).T
+
+
+def cSVD_beta(res, center_around="mean", amp_col="log2fc"):
+    """
+    This function performs cSVD to find the common phase and amplitude for all genes
+    across different cell types, and the common phase shift for all cell types.
+
+
+    Input:
+    - res: a dictionary of Beta ojects
+    - center_around: str, 'mean' or 'strongest', if 'mean' we center the data around the mean
+    of the phase, if 'strongest' we center the data around the phase of the 'strongest' sample
+    - amp_col: which column of Beta to use for amp
+    Output:
+    - U_: np.array of shape (n_genes, n_genes)
+    - V_: np.array of shape (n_celltypes, n_celltypes)
+    - S_norm: np.array of shape (n_genes, ), explained variance of SVD
+    """
+    keys = list(par_y.keys())
+    genes = res[keys[0]].index
+    Ny = len(keys)
+    Ng = genes.shape[0]
+
+    # passing to complex polar form
+    C_yg = np.zeros((Ny, Ng), dtype=complex)
+    for i, ct in enumerate(keys):
+        for j, g in enumerate(genes):
+            amp = res[ct][amp_col][j]
+            ph = res[ct]["phase"][j]
+            C_yg[i, j] = amp * np.exp(1j * ph)
+
+    # SVD
+    U, S, Vh = np.linalg.svd(C_yg.T, full_matrices=True)
+    V = Vh.T
+
+    # normalizing S
+    S_norm = S / np.sum(S)
+
+    U_ = np.zeros((U.shape[0], U.shape[1]), dtype=complex)
+    V_ = np.zeros((Vh.shape[0], Vh.shape[1]), dtype=complex)
+    # U is gene
+    # V is celltype
+
+    # if we want to find the common shift
+    if center_around == "mean":
+        for i in range(len(S)):
+            v = V[:, i].sum()
+            # rotation
+            rot = np.conj(v) / np.abs(v)
+            max_s = np.abs(V[:, i]).max()
+
+            U_[:, i] = U[:, i] * np.conj(rot) * S[i] * max_s
+            V_[:, i] = V[:, i] * rot / max_s
+    elif center_around == "strongest":
+        for i in range(len(S)):
+
+            # getting the index max entry of the i-th column, based on the absolute value
+            max_sample = np.argmax(np.abs(V[:, i]))
+            rot = V[max_sample, i]
+            # rotation, we will define a complex number on the uit circle
+            rot = np.conj(rot) / np.abs(rot)
+            max_s = np.abs(V[:, i]).max()
+            U_[:, i] = U[:, i] * rot * S[i] * max_s
+            # since we took the conj earlier, here we just multiply by rot
+            V_[:, i] = V[:, i] * rot / max_s
+
+    return U_, V_, S_norm

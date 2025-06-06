@@ -493,7 +493,8 @@ def benjamini_hochberg_correction(p_values):
 def cSVD(res, center_around="mean", return_explained=False):
     """
     This function performs cSVD to find the common phase and amplitude for all genes
-    across different cell types, and the common phase shift for all cell types
+    across different cell types, and the common phase shift for all cell types.
+    Defined for ONLY one harmonic!
 
     Input:
     - res: np.array of shape (n_celltypes/conditions , n_genes, 3 (a,b,mu))
@@ -543,7 +544,7 @@ def cSVD(res, center_around="mean", return_explained=False):
             # rotation, we will define a complex number on the uit circle
             rot = np.conj(rot) / np.abs(rot)
             max_s = np.abs(V[:, i]).max()
-            U_[:, i] = U[:, i] * np.conj(rot) * S[i] * max_s
+            U_[:, i] = U[:, i] * rot * S[i] * max_s
             # since we took the conj earlier, here we just multiply by rot
             V_[:, i] = V[:, i] * rot / max_s
 
