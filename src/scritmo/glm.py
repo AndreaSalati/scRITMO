@@ -288,36 +288,19 @@ def lm_gene_fit(
         # ΔBIC
         delta_bic = res.bic - res0.bic
         # collect params
-        d = {
-            "gene": gene,
-            "a_0": res.params["const"],
-            "BIC": delta_bic,
-            "pvalue": p_val,
-        }
-        for h in range(1, n_harmonics + 1):
-            d[f"a_{h}"] = res.params.get(f"a_{h}", np.nan)
-            d[f"b_{h}"] = res.params.get(f"b_{h}", np.nan)
+        d = {"gene": gene}
+        param_values = res.params.to_dict()
+        for k, v in param_values.items():
+            d[k] = v
+
+        d["BIC"] = delta_bic
+        d["pvalue"] = p_val
+
         results.append(d)
 
     df = pd.DataFrame(results).set_index("gene")
-
-    # amplitude & phase
-    if n_harmonics == 1:
-        df["amp"] = np.sqrt(df["a_1"] ** 2 + df["b_1"] ** 2)
-        df["phase"] = np.arctan2(df["b_1"], df["a_1"]) % (2 * np.pi)
-    else:
-        thetas = np.linspace(0, 2 * np.pi, 200)
-        amps, phs = [], []
-        for _, row in df.iterrows():
-            profile = np.full_like(thetas, row["a_0"])
-            for h in range(1, n_harmonics + 1):
-                profile += row[f"a_{h}"] * np.cos(h * thetas) + row[f"b_{h}"] * np.sin(
-                    h * thetas
-                )
-            amps.append((profile.max() - profile.min()) / 2)
-            phs.append(thetas[np.argmax(profile)])
-        df["amp"] = amps
-        df["phase"] = phs
+    df = Beta(df)
+    df.get_amp(inplace=True)
 
     # BH correction
     df["pvalue_correctedBH"] = benjamini_hochberg_correction(df["pvalue"].values)
