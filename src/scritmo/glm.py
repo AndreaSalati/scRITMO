@@ -6,7 +6,7 @@ from statsmodels.discrete.discrete_model import NegativeBinomial
 from scipy.stats import chi2
 from tqdm import tqdm
 from statsmodels.tools import add_constant
-from scritmo import create_harmonic_design_matrix, benjamini_hochberg_correction
+from .beta import Beta
 
 
 def glm_gene_fit(
@@ -161,17 +161,9 @@ def glm_gene_fit(
 
             # Extract all parameters except dispersion (if fitted) and name them
             param_values = result.params[:-1] if fit_disp else result.params
-            a_0 = param_values.iloc[-1]  # Intercept is the last before dispersion
-            result_dict["a_0"] = a_0
-
-            # Loop through harmonics to assign a_k and b_k dynamically
-            for h in range(1, n_harmonics + 1):
-                a_index = (h - 1) * 2
-                b_index = a_index + 1
-                if a_index < len(param_values):
-                    result_dict[f"a_{h}"] = param_values.iloc[a_index]
-                if b_index < len(param_values):
-                    result_dict[f"b_{h}"] = param_values.iloc[b_index]
+            param_values = param_values.to_dict()
+            for k, v in param_values.items():
+                result_dict[k] = v
 
             if fit_disp:
                 # fix this line!
@@ -202,77 +194,167 @@ def glm_gene_fit(
     params_g = params_g.set_index("gene")
 
     # adjust p-values for multiple testing
-
-    if n_harmonics == 1:
-        params_g["amp"] = np.sqrt(params_g["a_1"] ** 2 + params_g["b_1"] ** 2)
-        params_g["phase"] = np.arctan2(params_g["b_1"], params_g["a_1"]) % (2 * np.pi)
-
-    if n_harmonics > 1:
-        # Calculate amplitude and phase numerically for multi-harmonic
-        thetas = np.linspace(0, 2 * np.pi, 100)
-        amps = []
-        phases = []
-        for idx, row in params_g.iterrows():
-            profile = np.full_like(thetas, row["a_0"], dtype=float)
-            for h in range(1, n_harmonics + 1):
-                a = row.get(f"a_{h}", 0)
-                b = row.get(f"b_{h}", 0)
-                profile += a * np.cos(h * thetas) + b * np.sin(h * thetas)
-            amplitude = (profile.max() - profile.min()) / 2
-            phase = thetas[np.argmax(profile)]
-            amps.append(amplitude)
-            phases.append(phase)
-        params_g["amp"] = amps
-        params_g["phase"] = phases
-
     params_g["pvalue_correctedBH"] = benjamini_hochberg_correction(
         params_g["pvalue"].values
     )
 
+    params_g = Beta(params_g)
+    params_g.get_amp(inplace=True)
+
     return params_g
+
+
+def lm_gene_fit(
+    data,
+    phases,
+    genes=None,
+    layer=None,
+    n_harmonics=1,
+):
+    """
+    Fits log-transformed gene expression data to a harmonic model using OLS.
+
+    Parameters:
+    ----------
+    data : numpy.ndarray, pandas.DataFrame, or AnnData
+        Log-transformed expression matrix (samples × genes). If DataFrame,
+        genes should be columns. If AnnData, genes in var_names.
+    phases : array-like
+        Phases in radians for each sample (length = n_samples).
+    genes : list of str, optional
+        Subset of genes to fit. If None, use all in data.
+    layer : str, optional
+        If AnnData, which .layers[layer] to use; else adata.X.
+    n_harmonics : int, default=1
+        Number of harmonics to include (cos1/sin1, cos2/sin2, …).
+
+    Returns:
+    -------
+    params_g : pandas.DataFrame
+        Indexed by gene, with columns:
+        - a_0       intercept
+        - a_1, b_1  cos/sin coefficients (and a_2, b_2, … if n_harmonics>1)
+        - BIC       ΔBIC = BIC_full − BIC_null
+        - pvalue    from nested F-test
+        - amp       amplitude = √(a_1² + b_1²) (or max-minus-min/2 for ≥2)
+        - phase     phase in [0,2π)
+        - pvalue_correctedBH
+    """
+
+    # --- select gene list ---
+    if hasattr(data, "var_names"):
+        all_genes = list(data.var_names)
+    elif isinstance(data, pd.DataFrame):
+        all_genes = data.columns.tolist()
+    else:
+        raise ValueError("For numpy input you must pass genes=list_of_names")
+
+    if genes is None:
+        genes = all_genes
+    else:
+        genes = [g for g in genes if g in all_genes]
+        if not genes:
+            raise ValueError("None of the specified genes found in data")
+
+    # --- extract expression matrix ---
+    if hasattr(data, "layers"):
+        mat = data[:, genes].layers[layer] if layer else data[:, genes].X
+    elif isinstance(data, pd.DataFrame):
+        mat = data[genes].values
+    else:  # numpy array
+        mat = data[:, [all_genes.index(g) for g in genes]]
+
+    # if sparse
+    try:
+        mat = mat.toarray()
+    except AttributeError:
+        pass
+
+    # --- build design matrices ---
+    X = create_harmonic_design_matrix(phases, n_harmonics)
+    X_null = create_harmonic_design_matrix(phases, 0)  # intercept only
+
+    results = []
+    for i, gene in enumerate(genes):
+        y = mat[:, i]
+        # full model
+        mod = sm.OLS(y, X)
+        res = mod.fit()
+        # null model
+        mod0 = sm.OLS(y, X_null)
+        res0 = mod0.fit()
+        # nested F-test
+        f_stat, p_val, _ = res.compare_f_test(res0)
+        # ΔBIC
+        delta_bic = res.bic - res0.bic
+        # collect params
+        d = {
+            "gene": gene,
+            "a_0": res.params["const"],
+            "BIC": delta_bic,
+            "pvalue": p_val,
+        }
+        for h in range(1, n_harmonics + 1):
+            d[f"a_{h}"] = res.params.get(f"a_{h}", np.nan)
+            d[f"b_{h}"] = res.params.get(f"b_{h}", np.nan)
+        results.append(d)
+
+    df = pd.DataFrame(results).set_index("gene")
+
+    # amplitude & phase
+    if n_harmonics == 1:
+        df["amp"] = np.sqrt(df["a_1"] ** 2 + df["b_1"] ** 2)
+        df["phase"] = np.arctan2(df["b_1"], df["a_1"]) % (2 * np.pi)
+    else:
+        thetas = np.linspace(0, 2 * np.pi, 200)
+        amps, phs = [], []
+        for _, row in df.iterrows():
+            profile = np.full_like(thetas, row["a_0"])
+            for h in range(1, n_harmonics + 1):
+                profile += row[f"a_{h}"] * np.cos(h * thetas) + row[f"b_{h}"] * np.sin(
+                    h * thetas
+                )
+            amps.append((profile.max() - profile.min()) / 2)
+            phs.append(thetas[np.argmax(profile)])
+        df["amp"] = amps
+        df["phase"] = phs
+
+    # BH correction
+    df["pvalue_correctedBH"] = benjamini_hochberg_correction(df["pvalue"].values)
+    return Beta(df)
 
 
 def create_harmonic_design_matrix(phases, n_harmonics=1, add_intercept=True):
     """
-    Constructs a design matrix for harmonic regression with multiple harmonics.
+    Constructs a design matrix for harmonic regression with multiple harmonics,
+    with columns ordered as: intercept (a_0), a_1, b_1, a_2, b_2, ..., a_n, b_n.
 
     Parameters:
     -----------
     phases : array-like
-        Vector of phases in radians (0 to 2π)
+        Vector of phases in radians (length = n_samples).
     n_harmonics : int, default=1
-        Number of harmonics to include in the model
+        Number of harmonics to include (cos1/sin1 through cos_n/sin_n).
     add_intercept : bool, default=True
-        Whether to add an intercept (constant) term to the design matrix
+        If True, adds an intercept column named 'a_0'.
 
     Returns:
     --------
-    X : numpy.ndarray or pandas.DataFrame
-        Design matrix with columns for each harmonic (cos1, sin1, cos2, sin2, etc.)
-        If add_intercept is True, the last column will be the intercept term.
+    X_df : pandas.DataFrame
+        Design matrix of shape (n_samples, 1 + 2*n_harmonics) if add_intercept,
+        otherwise (n_samples, 2*n_harmonics). Columns are:
+        ['a_0', 'a_1', 'b_1', ..., 'a_n', 'b_n'].
     """
-    phases = np.asarray(phases)
+    phases = np.asarray(phases).squeeze()
     n_samples = len(phases)
-
-    # Initialize matrix with 2 columns per harmonic
-    X = np.zeros((n_samples, 2 * n_harmonics))
-
-    # Populate matrix with cos and sin terms for each harmonic
-    for h in range(1, n_harmonics + 1):
-        X[:, 2 * (h - 1)] = np.cos(h * phases)  # Cosine terms
-        X[:, 2 * (h - 1) + 1] = np.sin(h * phases)  # Sine terms
-
-    # Add column names
-    column_names = []
-    for h in range(1, n_harmonics + 1):
-        column_names.extend([f"cos{h}", f"sin{h}"])
-
-    # Convert to DataFrame with named columns
-    X_df = pd.DataFrame(X, columns=column_names)
-
+    cols = {}
     if add_intercept:
-        X_df = add_constant(X_df, prepend=False)
+        cols["a_0"] = np.ones(n_samples, dtype=float)
+    for h in range(1, n_harmonics + 1):
+        cols[f"a_{h}"] = np.cos(h * phases)
+        cols[f"b_{h}"] = np.sin(h * phases)
 
+    X_df = pd.DataFrame(cols)
     return X_df
 
 

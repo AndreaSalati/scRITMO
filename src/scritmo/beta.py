@@ -615,7 +615,7 @@ def cSVD_beta(res, center_around="mean", amp_col="log2fc"):
     - V_: np.array of shape (n_celltypes, n_celltypes)
     - S_norm: np.array of shape (n_genes, ), explained variance of SVD
     """
-    keys = list(par_y.keys())
+    keys = list(res.keys())
     genes = res[keys[0]].index
     Ny = len(keys)
     Ng = genes.shape[0]
@@ -650,6 +650,7 @@ def cSVD_beta(res, center_around="mean", amp_col="log2fc"):
 
             U_[:, i] = U[:, i] * np.conj(rot) * S[i] * max_s
             V_[:, i] = V[:, i] * rot / max_s
+
     elif center_around == "strongest":
         for i in range(len(S)):
 
