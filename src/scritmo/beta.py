@@ -624,8 +624,8 @@ def cSVD_beta(res, center_around="mean", amp_col="log2fc"):
     C_yg = np.zeros((Ny, Ng), dtype=complex)
     for i, ct in enumerate(keys):
         for j, g in enumerate(genes):
-            amp = res[ct][amp_col][j]
-            ph = res[ct]["phase"][j]
+            amp = res[ct][amp_col][g]
+            ph = res[ct]["phase"][g]
             C_yg[i, j] = amp * np.exp(1j * ph)
 
     # SVD
