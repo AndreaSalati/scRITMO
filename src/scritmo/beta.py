@@ -225,16 +225,37 @@ class Beta(pd.DataFrame):
         out_df = pd.DataFrame(out, columns=cols, index=self.index)
 
         if inplace:
-            self["y_mean"] = out_df["y_mean"]
-            self["y_min"] = out_df["y_min"]
-            self["y_max"] = out_df["y_max"]
-            self["amp_abs"] = out_df["amp_abs"]
-            self["phase"] = out_df["phase"]
-            self["amp"] = out_df["amp"]
-            self["log2fc"] = out_df["log2fc"]
+            self.loc[:, "y_mean"] = out_df["y_mean"]
+            self.loc[:, "y_min"] = out_df["y_min"]
+            self.loc[:, "y_max"] = out_df["y_max"]
+            self.loc[:, "amp_abs"] = out_df["amp_abs"]
+            self.loc[:, "phase"] = out_df["phase"]
+            self.loc[:, "amp"] = out_df["amp"]
+            self.loc[:, "log2fc"] = out_df["log2fc"]
             return
         else:
             return out_df
+
+    def kill_amps(self, genes=None, eps=1e-6):
+        """
+        This command zeros out all haronics except the
+        zero one for the indicated genes.
+        eps is by default not exactly zero as it creates problems with gradients
+        """
+        if genes is None:
+            genes = self.index
+        genes = np.array(genes)
+
+        Ng = genes.shape[0]
+
+        beta = self.get_ab(keep_a_0=False)
+        cols = beta.columns
+
+        for col in cols:
+            self.loc[genes, col] = self.loc[genes, col] * eps
+
+        # call get_amps such that we kill also the polar amps
+        self.get_amp(inplace=True)
 
     def plot_circular(self, nh, beta2=None, mode="max-min", legend=True):
         """

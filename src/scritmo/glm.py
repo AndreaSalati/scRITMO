@@ -49,6 +49,8 @@ def glm_gene_fit(
         If None, uses adata.X
     n_harmonics : int, default=1
         Number of harmonics to fit. 1 for cosine and sine, 2 for second harmonic, etc.
+    outlier_treshold:
+        Percentile of cells to retain, offers protection from outliers
 
     Returns:
     --------
