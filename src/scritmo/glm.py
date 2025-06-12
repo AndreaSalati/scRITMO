@@ -18,6 +18,7 @@ def glm_gene_fit(
     fit_disp=False,
     layer=None,
     n_harmonics=1,
+    outlier_treshold=99.0,
 ):
     """
     Fits gene expression data to a harmonic model using statsmodels.
@@ -122,22 +123,34 @@ def glm_gene_fit(
         else:
             gene_counts = data_c[:, gene_index]
 
+        threshold = np.percentile(gene_counts, outlier_treshold)
+        mask = gene_counts < threshold
+
+        if mask.sum() == 0:
+            print(f"Skipping gene {gene_name} due to empty mask")
+            continue
+
+        gene_counts = gene_counts[mask]
+        counts_ = counts[mask]
+
         # Fit the models using statsmodels
         if fit_disp:
-            model = NegativeBinomial(gene_counts, X, offset=np.log(counts))
-            model_null = NegativeBinomial(gene_counts, X_null, offset=np.log(counts))
+            model = NegativeBinomial(gene_counts, X[mask], offset=np.log(counts_))
+            model_null = NegativeBinomial(
+                gene_counts, X_null[mask], offset=np.log(counts_)
+            )
         else:
             model = sm.GLM(
                 gene_counts,
-                X,
+                X[mask],
                 family=sm.families.NegativeBinomial(alpha=fixed_disp),
-                offset=np.log(counts),
+                offset=np.log(counts_),
             )
             model_null = sm.GLM(
                 gene_counts,
-                X_null,
+                X_null[mask],
                 family=sm.families.NegativeBinomial(alpha=fixed_disp),
-                offset=np.log(counts),
+                offset=np.log(counts_),
             )
 
         # Fit models

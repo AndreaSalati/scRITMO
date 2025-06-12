@@ -53,7 +53,9 @@ def circular_sqrt_mean_squared_error(x, y, period):
     return np.sqrt(np.mean(v**2))
 
 
-def optimal_shift(p, p0, n_s=200, return_shift=False, return_shift_only=False):
+def optimal_shift(
+    p, p0, n_s=200, return_shift=False, return_shift_only=False, allow_flip=True
+):
     """
     Aligns two sequences defined on the unit circle, taking care of the periodicity
     and the flipping symmetry of the circle.
@@ -98,15 +100,21 @@ def optimal_shift(p, p0, n_s=200, return_shift=False, return_shift_only=False):
     mad, mad_neg = v[best_shift_ind], v_neg[best_shift_ind_neg]
 
     # selecting which direction is the best
-    if mad < mad_neg:
+    if allow_flip:
+        if mad < mad_neg:
+            phi_aligned = theta_cs[:, best_shift_ind]
+            best_mad = mad
+            best_shift = shifts[best_shift_ind]
+        else:
+            print("Flipping occurred")
+            phi_aligned = theta_cs_neg[:, best_shift_ind_neg]
+            best_mad = mad_neg
+            best_shift = shifts[best_shift_ind_neg]
+    else:
+        # Force non-flipped version regardless of MAD comparison
         phi_aligned = theta_cs[:, best_shift_ind]
         best_mad = mad
         best_shift = shifts[best_shift_ind]
-    else:
-        print("Flipping occured")
-        phi_aligned = theta_cs_neg[:, best_shift_ind_neg]
-        best_mad = mad_neg
-        best_shift = shifts[best_shift_ind_neg]
 
     if return_shift_only:
         return best_shift
@@ -221,6 +229,7 @@ def circ_mode(l_xc):
     phi_mode = phi_x[phi_max_ind]
     return phi_mode
 
+
 def get_shift_y(ext_time, ph, context):
     """
     This function aligns all cells beloging to the
@@ -229,13 +238,13 @@ def get_shift_y(ext_time, ph, context):
     context_u = np.unique(context)
     shift_y = pd.Series(index=context_u)
 
-    for i,ct in enumerate(context_u):
+    for i, ct in enumerate(context_u):
         mask = context == ct
         tp_ct = ext_time[mask]
         delta = sr.optimal_shift(ph[mask], tp_ct, return_shift_only=True)
         if delta > np.pi:
-            delta -= 2*np.pi
-        
+            delta -= 2 * np.pi
+
         shift_y[ct] = delta
 
     return shift_y

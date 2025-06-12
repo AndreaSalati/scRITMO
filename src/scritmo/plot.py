@@ -3,11 +3,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from .linear_regression import harmonic_function_exp, harmonic_function
 from scritmo.linear_regression import polar_genes_pandas
-from .basics import w, rh
+from .basics import w, rh, ind2
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from adjustText import adjust_text
+from .beta import Beta
 
 
 def xy():
@@ -495,10 +496,16 @@ def plot_circadian_data_and_fit(
     rh = w**-1
     phi_x = np.linspace(0, 2 * np.pi, 100)
 
-    amp, phase, mu = params_g[columns_names].loc[g]
-    y = amp * np.cos(phi_x - phase) + mu
-    if exp:
-        y = np.exp(y)
+    params_g = Beta(params_g)
+    y = params_g.predict(phi_x, exp_base=exp)
+
+    ind_g = ind2(params_g.index, g)[0]
+    y = y[:, ind_g]
+
+    # amp, phase, mu = params_g[columns_names].loc[g]
+    # y = amp * np.cos(phi_x - phase) + mu
+    # if exp:
+    #     y = np.exp(y)
 
     ax.plot(
         phi_x * rh,

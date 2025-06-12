@@ -173,7 +173,7 @@ class Beta(pd.DataFrame):
 
         return self.loc[:, keep].copy()
 
-    def predict(self, phi, exp_base=None):
+    def predict(self, phi, exp_base=False):
         """
         Predict the values using the beta coefficients.
         t: time points
@@ -182,10 +182,10 @@ class Beta(pd.DataFrame):
         nh = int((beta.shape[1] - 1) / 2)
         X = make_X(phi, nh=nh)
 
-        if exp_base == None:
+        if not exp_base:
             return X @ beta.T.values
         else:
-            return exp_base ** (X @ beta.T.values)
+            return np.exp(X @ beta.T.values)
 
     def get_amp(self, Ndense=1000, inplace=False):
         """
