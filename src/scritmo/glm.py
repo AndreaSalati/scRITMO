@@ -124,7 +124,7 @@ def glm_gene_fit(
             gene_counts = data_c[:, gene_index]
 
         threshold = np.percentile(gene_counts, outlier_treshold)
-        mask = gene_counts < threshold
+        mask = gene_counts <= threshold
 
         if mask.sum() == 0:
             print(f"Skipping gene {gene_name} due to empty mask")
