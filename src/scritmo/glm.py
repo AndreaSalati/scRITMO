@@ -18,7 +18,7 @@ def glm_gene_fit(
     fit_disp=False,
     layer=None,
     n_harmonics=1,
-    outlier_treshold=99.0,
+    outlier_treshold=100.0,
 ):
     """
     Fits gene expression data to a harmonic model using statsmodels.
