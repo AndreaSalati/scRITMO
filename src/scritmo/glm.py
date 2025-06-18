@@ -7,6 +7,8 @@ from scipy.stats import chi2
 from tqdm import tqdm
 from statsmodels.tools import add_constant
 from .beta import Beta
+from sklearn.feature_selection import mutual_info_classif
+from scipy.sparse import issparse
 
 
 def glm_gene_fit(
@@ -19,6 +21,7 @@ def glm_gene_fit(
     layer=None,
     n_harmonics=1,
     outlier_treshold=100.0,
+    use_mi=None,
 ):
     """
     Fits gene expression data to a harmonic model using statsmodels.
@@ -188,6 +191,7 @@ def glm_gene_fit(
 
             result_dict["BIC"] = delta_bic
             result_dict["pvalue"] = pval
+            # result_dict["outlier_driven"] = simple_outlier_detector(gene_counts)
             results_list.append(result_dict)
 
         except Exception as e:
@@ -215,6 +219,11 @@ def glm_gene_fit(
 
     params_g = Beta(params_g)
     params_g.get_amp(inplace=True)
+
+    if use_mi:
+        print("computing Mutual Information...")
+        mi = compute_mutual_information(data, phases, genes)
+        params_g["mi"] = mi
 
     return params_g
 
@@ -369,3 +378,44 @@ def benjamini_hochberg_correction(p_values):
         corrected_p_values[sorted_indices[i]] = min(p * n / (i + 1), 1.0)
 
     return corrected_p_values
+
+
+def compute_mutual_information(adata, label, genes, layer=None):
+    """
+    Computes the mutual information between a discrete label (given as a key
+    in `adata.obs` or directly as a pandas Series) and the log-normalized
+    expression of selected genes from an AnnData object.
+
+    Parameters:
+    ----------
+    adata : AnnData
+        Annotated data matrix.
+    label : str or array-like
+        If str: key in `adata.obs` corresponding to a discrete categorical variable.
+        If array-like: a 1D array or pandas Series with labels for each cell.
+    genes : list of str
+        List of gene names to include.
+    layer : str or None
+        If specified, the name of the layer in `adata.layers` to extract expression from.
+        Otherwise, uses `adata.X`.
+
+    Returns:
+    -------
+    pandas.Series
+        Mutual information scores for each gene, indexed by gene name.
+    """
+    # Get the counts matrix
+    X = adata[:, genes].layers[layer] if layer else adata[:, genes].X
+    if issparse(X):
+        X = X.toarray()
+
+    # Get discrete labels
+    if isinstance(label, str):
+        y = adata.obs[label].astype("category").cat.codes.values
+    else:
+        label = pd.Series(label, index=adata.obs_names)  # to ensure same indexing
+        y = label.astype("category").cat.codes.values
+
+    # Compute MI
+    mi_scores = mutual_info_classif(X, y, discrete_features=False, random_state=0)
+    return pd.Series(mi_scores, index=genes, name="mutual_information")
