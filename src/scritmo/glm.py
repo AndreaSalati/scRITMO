@@ -7,7 +7,7 @@ from scipy.stats import chi2
 from tqdm import tqdm
 from statsmodels.tools import add_constant
 from .beta import Beta
-from sklearn.feature_selection import mutual_info_classif
+from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
 from scipy.sparse import issparse
 
 
@@ -419,3 +419,62 @@ def compute_mutual_information(adata, label, genes, layer=None):
     # Compute MI
     mi_scores = mutual_info_classif(X, y, discrete_features=False, random_state=0)
     return pd.Series(mi_scores, index=genes, name="mutual_information")
+
+
+def compute_mutual_information_reg(adata, phase, genes, layer=None):
+    """
+    Computes the mutual information between a discrete label (given as a key
+    in `adata.obs` or directly as a pandas Series) and the log-normalized
+    expression of selected genes from an AnnData object.
+
+    Parameters:
+    ----------
+    adata : AnnData
+        Annotated data matrix.
+    phase : str or array-like
+       either the obs name of the cells phases or, the cells phases themself
+    genes : list of str
+        List of gene names to include.
+    layer : str or None
+        If specified, the name of the layer in `adata.layers` to extract expression from.
+        Otherwise, uses `adata.X`.
+
+    Returns:
+    -------
+    pandas.Series
+        Mutual information scores for each gene, indexed by gene name.
+    """
+    # Get the counts matrix
+    X = adata[:, genes].layers[layer] if layer else adata[:, genes].X
+    if issparse(X):
+        X = X.toarray()
+
+    # Get discrete labels
+    if isinstance(phase, str):
+        y = adata.obs[phase]
+    else:
+        y = phase
+
+    y_cos = np.cos(y)
+    y_sin = np.sin(y)
+
+    mi_cos = mutual_info_regression(X, y_cos)
+    mi_sin = mutual_info_regression(X, y_sin)
+
+    # 2. Build the DataFrame
+    df = pd.DataFrame(
+        {
+            "cos": mi_cos,
+            "sin": mi_sin,
+        }
+    )
+    # 3. Combine into scalar summaries
+    df["norm"] = np.sqrt(df["cos"] ** 2 + df["sin"] ** 2)
+    df["max"] = df[["cos", "sin"]].max(axis=1)
+    df["sum"] = df["cos"] + df["sin"]
+
+    # 4. Label rows by gene name
+    df.index = genes
+    df.index.name = "gene"
+
+    return df
