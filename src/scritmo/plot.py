@@ -378,7 +378,34 @@ def plot_circadian_data(
     alpha=0.7,
     s=1,
     log_bin_y=False,
+    jitter=0.0,
 ):
+    """
+    Plot expression values of a gene over circadian phase.
+
+    Parameters
+    ----------
+    adata : AnnData
+        Annotated data matrix.
+    phis : array-like
+        Array of circadian phases (in radians).
+    g : str
+        Gene name to plot.
+    ax : matplotlib.axes.Axes or None
+        Axis to plot on. If None, a new figure and axis are created.
+    layer : str
+        Layer in `adata.layers` to extract expression from.
+    n_bins : int or None
+        Number of bins for aggregating expression. If None, raw points are plotted.
+    alpha : float
+        Transparency of scatter points.
+    s : float
+        Size of scatter points.
+    log_bin_y : bool
+        If True, log-transform the binned expression values.
+    jitter : float
+        Standard deviation of Gaussian noise added to phase values (in hours) for visual separation.
+    """
     if ax is None:
         fig, ax = plt.subplots()
 
@@ -424,9 +451,10 @@ def plot_circadian_data(
             marker="o",
         )
     else:
+        x = (phis * rh) + np.random.normal(0, jitter, size=phis.shape)
         # Plot original data points
         ax.scatter(
-            phis * rh,
+            x,
             expression,
             s=s,
             label="data",
@@ -456,6 +484,7 @@ def plot_circadian_data_and_fit(
     exp=True,
     columns_names=["amp", "phase", "a_0"],
     s=10,
+    jitter=0.0,
 ):
     """
     Creates a plot of circadian expression data and GLM fit, returning an axis object.
@@ -474,6 +503,8 @@ def plot_circadian_data_and_fit(
         log_bin_y (bool): If True, apply log transformation to binned y values.
         exp (bool): If True, apply exponential transformation to GLM fit.
         columns_names (list): Column names in params_g for amp, phase, and mu.
+        jitter : float
+            Standard deviation of Gaussian noise added to phase values (in hours) for visual separation.
 
     Returns:
         matplotlib.axes._axes.Axes: Axis object with the plot.
@@ -489,6 +520,7 @@ def plot_circadian_data_and_fit(
         alpha=alpha,
         log_bin_y=log_bin_y,
         s=s,
+        jitter=jitter,
     )
 
     # Now add the GLM fit
