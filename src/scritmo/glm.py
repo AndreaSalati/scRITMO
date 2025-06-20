@@ -8,6 +8,8 @@ from tqdm import tqdm
 from statsmodels.tools import add_constant
 from .beta import Beta
 from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
+from sklearn.preprocessing import StandardScaler
+
 from scipy.sparse import issparse
 
 
@@ -380,7 +382,7 @@ def benjamini_hochberg_correction(p_values):
     return corrected_p_values
 
 
-def compute_mutual_information(adata, label, genes, layer=None):
+def compute_mutual_information_classif(adata, label, genes, layer=None, n_jobs=None):
     """
     Computes the mutual information between a discrete label (given as a key
     in `adata.obs` or directly as a pandas Series) and the log-normalized
@@ -417,22 +419,24 @@ def compute_mutual_information(adata, label, genes, layer=None):
         y = label.astype("category").cat.codes.values
 
     # Compute MI
-    mi_scores = mutual_info_classif(X, y, discrete_features=False, random_state=0)
+    mi_scores = mutual_info_classif(
+        X, y, discrete_features=False, random_state=0, n_jobs=n_jobs
+    )
     return pd.Series(mi_scores, index=genes, name="mutual_information")
 
 
-def compute_mutual_information_reg(adata, phase, genes, layer=None):
+def compute_mutual_information_reg(adata, phase, genes, layer=None, n_jobs=None):
     """
-    Computes the mutual information between a discrete label (given as a key
-    in `adata.obs` or directly as a pandas Series) and the log-normalized
-    expression of selected genes from an AnnData object.
+    Computes the mutual information between a circular phase
+    and the log-normalized expression of selected genes from
+    an AnnData object.
 
     Parameters:
     ----------
     adata : AnnData
         Annotated data matrix.
-    phase : str or array-like
-       either the obs name of the cells phases or, the cells phases themself
+    phase : array-like
+       array of phases, in radians
     genes : list of str
         List of gene names to include.
     layer : str or None
@@ -441,7 +445,7 @@ def compute_mutual_information_reg(adata, phase, genes, layer=None):
 
     Returns:
     -------
-    pandas.Series
+    pandas.DataFrame
         Mutual information scores for each gene, indexed by gene name.
     """
     # Get the counts matrix
@@ -449,17 +453,15 @@ def compute_mutual_information_reg(adata, phase, genes, layer=None):
     if issparse(X):
         X = X.toarray()
 
-    # Get discrete labels
-    if isinstance(phase, str):
-        y = adata.obs[phase]
-    else:
-        y = phase
+    y_cos = np.cos(phase)
+    y_sin = np.sin(phase)
 
-    y_cos = np.cos(y)
-    y_sin = np.sin(y)
+    X = StandardScaler().fit_transform(X)
+    y_cos = StandardScaler().fit_transform(y_cos.reshape(-1, 1)).ravel()
+    y_sin = StandardScaler().fit_transform(y_sin.reshape(-1, 1)).ravel()
 
-    mi_cos = mutual_info_regression(X, y_cos)
-    mi_sin = mutual_info_regression(X, y_sin)
+    mi_cos = mutual_info_regression(X, y_cos, n_jobs=n_jobs)
+    mi_sin = mutual_info_regression(X, y_sin, n_jobs=n_jobs)
 
     # 2. Build the DataFrame
     df = pd.DataFrame(
