@@ -1,5 +1,55 @@
 import numpy as np
 
+droin_selected = np.array([
+    "Abcg5", "Abcg8", "Ak4", "Camk1d", "Cdh1", "Chka", "Clpx", "Col27a1", "Coq10b", "Coq8a",
+    "Crip2", "Csrp3", "Dbp", "Ddc", "Dennd2b", "Dhrs3", "Efhd2", "Elovl6", "Eps8l2", "Ethe1",
+    "Fam47e", "Fpgs", "Gldc", "Gm13340", "Gm13341", "H1f2", "Hsd11b1", "Hsd17b2", "Insig2",
+    "Lgalsl", "Limd2", "Mrap", "Nampt", "Noct", "Nr1d1", "Nr1d2", "Pid1", "Pnkd", "Pnrc1",
+    "Por", "Pxmp4", "Rbms1", "Rgs16", "Rnf125", "Sigmar1", "Slc10a2", "St3gal1", "St3gal5",
+    "Stra6l", "Sucnr1", "Tab2", "Tef", "Trim2", "Tubb2a", "Ubxn1", "Usp2"
+])
+droin_selected_2 = np.array([
+    "2410006H16Rik", "Abcg5", "Abcg8", "Acacb", "Ak4", "Aldob", "Aqp8", "Arg1", "Arpc1b", "Bnip3",
+    "Bri3", "Camk1d", "Ccl5", "Cd52", "Cdh1", "Cela1", "Chka", "Cldn1", "Clpx", "Col27a1",
+    "Coq10b", "Coq8a", "Creld2", "Crip1", "Crip2", "Csrp3", "Dbp", "Dbt", "Ddc", "Dennd2b",
+    "Dhrs3", "Efhd2", "Elovl3", "Elovl6", "Eps8l2", "Ethe1", "Fam47e", "Fasn", "Fdps", "Fermt2",
+    "Fkbp5", "Fpgs", "Gldc", "Gm13340", "Gm13341", "Gm29966", "H1f2", "Haao", "Hamp2", "Hsd11b1",
+    "Hsd17b2", "Hspa4l", "Insig2", "Keg1", "Lgalsl", "Limd2", "Mafb", "Mal2", "Mrap", "Mt1",
+    "Nampt", "Nfil3", "Noct", "Nop53", "Nr1d1", "Nr1d2", "Pid1", "Pim3", "Pnkd", "Pnrc1", "Por",
+    "Ppa1", "Psen2", "Psmb8", "Pxdc1", "Pxmp4", "Rbms1", "Rgs16", "Rnf125", "Sgpl1", "Sigmar1",
+    "Slc10a2", "Slc25a47", "Slc30a10", "St3gal1", "St3gal5", "Stmp1", "Stra6l", "Sucnr1", "Tab2",
+    "Tars", "Tef", "Tmem150a", "Trim2", "Tubb2a", "Ubxn1", "Usp2", "Zfas1", "Zfp36l1"
+])
+weger = np.array([
+    "Ak4", "Alpl", "Cbs", "Cdkn1a", "Chka", "Ciart", "Clpx", "Coq10b", "Coq8a", "Cry1",
+    "Dbp", "Dennd2b", "Efhd2", "Eps8l2", "Gys2", "Insig2", "Kynu", "Lgals9", "Lgalsl",
+    "Mad2l2", "Mreg", "Nampt", "Nat8f5", "Nmrk1", "Nr1d1", "Nr1d2", "Nrg4", "Per3", "Pnrc1",
+    "Ppard", "Pxmp4", "Rnf125", "Tjp3", "Tspan4", "Tymp", "Usp2", "Wee1", "Bmal1",
+    "Ciart", "Clock", "Cry1", "Cry2", "Dbp", "Hlf", "Npas2", "Nr1d1", "Nr1d2", "Per1", "Per2",
+    "Per3", "Tef"
+])
+clock = np.array([
+    "Arntl", 
+    "Bmal1", #in case different annotation version     
+    "Clock",
+    "Npas2",      
+    "Cry1",
+    "Cry2",
+    "Per1",
+    "Per2",
+    "Per3",
+    "Nr1d1",     
+    "Nr1d2",     
+    "Dbp",        
+    "Rora",       
+    "Rorb",
+    "Rorc",
+    "Bhlhe40",    
+    "Bhlhe41",    
+    "Ciart",
+    "Gm129",
+    "Chrono"      
+])
 # core clock , with Ciart
 ccg = np.array(
     [
@@ -15,6 +65,7 @@ ccg = np.array(
         "Ciart",
         "Per3",
         "Bmal1",
+        "Rorc"
     ]
 )
 
