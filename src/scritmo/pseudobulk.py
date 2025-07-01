@@ -109,7 +109,8 @@ def pseudobulk(
       - optionally a `"norm"` layer.
     """
     if n_groups != 1:
-        raise ValueError("n_groups>1 is not yet supported in this fast implementation")
+        adata.obs["split_id"] = np.random.randint(n_groups, size=adata.n_obs)
+        groupby_obs_list = groupby_obs_list + ["split_id"]
 
     if type(groupby_obs_list) is not list:
         groupby_obs_list = [groupby_obs_list]
