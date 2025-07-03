@@ -583,6 +583,95 @@ class Beta(pd.DataFrame):
         # 5) reindex and return
         return self.reindex(columns=data_cols_sorted + meta_cols)
 
+    def plot_circular_adjust(self, nh, beta2=None, mode="max-min"):
+        """
+        Make a circular plot for the betas, with non-overlapping labels using adjustText.
+        """
+
+        # --- compute phi, r, x, y for the first beta set ---
+        amp1 = self.get_amp()
+        if mode == "max-min":
+            phi1 = amp1["phase"]
+            r1 = (amp1["y_max"] - amp1["y_min"]) / 2
+            lim = r1.max() * 1.1
+        elif mode == "rel-amp":
+            phi1 = amp1["phase"]
+            mean1 = amp1.iloc[:, 0]
+            assert np.all(mean1 >= 0), "mean must be >= 0 for rel-amp"
+            r1 = amp1.iloc[:, 3] / mean1 / 2
+            lim = np.max(np.log2(amp1.iloc[:, 4])) * 1.1
+        else:
+            raise ValueError("mode must be 'max-min' or 'rel-amp'")
+
+        # y and x inverted to have origin on north and clockwise direction
+        y1 = r1 * np.cos(phi1)
+        x1 = r1 * np.sin(phi1)
+
+        # --- set up figure & axis ---
+        fig, ax = plt.subplots(figsize=(8, 8))
+        ax.set_aspect("equal")
+        ax.set_title(f"Circular plot ({mode})")
+
+        texts = []
+
+        # plot first set
+        for xi, yi, lbl in zip(x1, y1, self.index):
+            ax.scatter(xi, yi, marker="o")
+            texts.append(ax.text(xi, yi, lbl, fontsize="small"))
+
+        # --- optionally compute & plot second beta set ---
+        if beta2 is not None:
+            amp2 = beta2.get_amp(nh=nh)
+            if mode == "max-min":
+                phi2 = amp2["phase"]
+                r2 = (amp2["y_max"] - amp2["y_min"]) / 2
+                lim2 = r2.max() * 1.1
+            else:  # rel-amp
+                phi2 = amp2["phase"]
+                mean2 = amp2.iloc[:, 0]
+                assert np.all(mean2 >= 0), "mean must be >= 0 for rel-amp"
+                r2 = amp2.iloc[:, 3] / mean2 / 2
+                lim2 = np.max(np.log2(amp2.iloc[:, 4])) * 1.1
+
+            # update plot limit
+            lim = max(lim, lim2)
+            y2 = r2 * np.cos(phi2)
+            x2 = r2 * np.sin(phi2)
+
+            for xi, yi, lbl in zip(x2, y2, self.index):
+                ax.scatter(xi, yi, marker="x")
+                texts.append(ax.text(xi, yi, lbl, fontsize="small"))
+
+        # --- adjust text to avoid overlaps ---
+        adjust_text(
+            texts,
+            ax=ax,
+            arrowprops=dict(arrowstyle="-", color="gray", lw=0.5),
+            expand_points=(1.2, 1.2),
+            expand_text=(1.2, 1.2),
+        )
+
+        # --- axes lines & limits ---
+        ax.axhline(0, color="gray", lw=0.5)
+        ax.axvline(0, color="gray", lw=0.5)
+        ax.set_xlim(-lim, lim)
+        ax.set_ylim(-lim, lim)
+
+        # --- legend for marker types only (if beta2 plotted) ---
+        if beta2 is not None:
+            ax.scatter([], [], marker="o", color="k", label="beta1")
+            ax.scatter([], [], marker="x", color="k", label="beta2")
+            ax.legend(
+                loc="upper left",
+                bbox_to_anchor=(1, 1),
+                ncol=1,
+                fontsize="small",
+                frameon=False,
+            )
+
+        plt.tight_layout()
+        plt.show()
+
     # def sort_data_metadata(self):
     #     """
     #     Reorder columns in place so that:
@@ -687,91 +776,3 @@ def cSVD_beta(res, center_around="mean", amp_col="log2fc"):
             V_[:, i] = V[:, i] * rot / max_s
 
     return U_, V_, S_norm
-
-
-def plot_circular_adjust(self, nh, beta2=None, mode="max-min"):
-    """
-    Make a circular plot for the betas, with non-overlapping labels using adjustText.
-    """
-
-    # --- compute phi, r, x, y for the first beta set ---
-    amp1 = self.get_amp(nh=nh)
-    if mode == "max-min":
-        phi1 = amp1["phi_peak"]
-        r1   = (amp1["y_max"] - amp1["y_min"]) / 2
-        lim  = r1.max() * 1.1
-    elif mode == "rel-amp":
-        phi1 = amp1["phi_peak"]
-        mean1 = amp1.iloc[:, 0]
-        assert np.all(mean1 >= 0), "mean must be >= 0 for rel-amp"
-        r1   = amp1.iloc[:, 3] / mean1 / 2
-        lim  = np.max(np.log2(amp1.iloc[:, 4])) * 1.1
-    else:
-        raise ValueError("mode must be 'max-min' or 'rel-amp'")
-    x1 = r1 * np.cos(phi1)
-    y1 = r1 * np.sin(phi1)
-
-    # --- set up figure & axis ---
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax.set_aspect("equal")
-    ax.set_title(f"Circular plot ({mode})")
-
-    texts = []
-
-    # plot first set
-    for xi, yi, lbl in zip(x1, y1, self.index):
-        ax.scatter(xi, yi, marker="o")
-        texts.append(ax.text(xi, yi, lbl, fontsize="small"))
-
-    # --- optionally compute & plot second beta set ---
-    if beta2 is not None:
-        amp2 = beta2.get_amp(nh=nh)
-        if mode == "max-min":
-            phi2 = amp2["phi_peak"]
-            r2   = (amp2["y_max"] - amp2["y_min"]) / 2
-            lim2 = r2.max() * 1.1
-        else:  # rel-amp
-            phi2 = amp2["phi_peak"]
-            mean2 = amp2.iloc[:, 0]
-            assert np.all(mean2 >= 0), "mean must be >= 0 for rel-amp"
-            r2   = amp2.iloc[:, 3] / mean2 / 2
-            lim2 = np.max(np.log2(amp2.iloc[:, 4])) * 1.1
-
-        # update plot limit
-        lim = max(lim, lim2)
-        x2 = r2 * np.cos(phi2)
-        y2 = r2 * np.sin(phi2)
-
-        for xi, yi, lbl in zip(x2, y2, self.index):
-            ax.scatter(xi, yi, marker="x")
-            texts.append(ax.text(xi, yi, lbl, fontsize="small"))
-
-    # --- adjust text to avoid overlaps ---
-    adjust_text(
-        texts,
-        ax=ax,
-        arrowprops=dict(arrowstyle="-", color="gray", lw=0.5),
-        expand_points=(1.2, 1.2),
-        expand_text=(1.2, 1.2),
-    )
-
-    # --- axes lines & limits ---
-    ax.axhline(0, color="gray", lw=0.5)
-    ax.axvline(0, color="gray", lw=0.5)
-    ax.set_xlim(-lim, lim)
-    ax.set_ylim(-lim, lim)
-
-    # --- legend for marker types only (if beta2 plotted) ---
-    if beta2 is not None:
-        ax.scatter([], [], marker="o", color="k", label="beta1")
-        ax.scatter([], [], marker="x", color="k", label="beta2")
-        ax.legend(
-            loc="upper left",
-            bbox_to_anchor=(1, 1),
-            ncol=1,
-            fontsize="small",
-            frameon=False,
-        )
-
-    plt.tight_layout()
-    plt.show()
