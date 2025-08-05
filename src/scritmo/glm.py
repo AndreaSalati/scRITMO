@@ -9,8 +9,191 @@ from statsmodels.tools import add_constant
 from .beta import Beta
 from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
 from sklearn.preprocessing import StandardScaler
-
 from scipy.sparse import issparse
+from joblib import Parallel, delayed
+
+
+def glm_gene_fit_parallel(
+    data,
+    phases,
+    genes=None,
+    counts=None,
+    fixed_disp=0.1,
+    fit_disp=False,
+    layer=None,
+    n_harmonics=1,
+    outlier_treshold=100.0,
+    use_mi=None,
+    n_jobs=-1,  # Add n_jobs parameter
+):
+    """
+    Fits gene expression data to a harmonic model using statsmodels (Parallelized).
+    ... (rest of the docstring) ...
+    n_jobs : int, default=-1
+        Number of CPU cores to use. -1 means using all available cores.
+    """
+
+    # --- All the setup code remains the same ---
+    if genes is None:
+        genes = data.var_names.tolist()
+    else:
+        genes = [gene for gene in genes if gene in data.var_names]
+        if len(genes) == 0:
+            raise ValueError("None of the specified genes were found in AnnData object")
+
+    if layer is None:
+        data_c = data[:, genes].X
+    else:
+        data_c = data[:, genes].layers[layer]
+
+    try:
+        data_c = data_c.toarray()
+    except AttributeError:
+        pass
+
+    if counts is None:
+        total_counts = (
+            data.X.sum(axis=1) if layer is None else data.layers[layer].sum(axis=1)
+        )
+        try:
+            counts = total_counts.A1
+        except AttributeError:
+            counts = total_counts
+
+    X = create_harmonic_design_matrix(phases.squeeze(), n_harmonics=n_harmonics)
+    X_null = create_harmonic_design_matrix(phases.squeeze(), 0)
+
+    # --- This is the new parallelized part ---
+    # The for loop is replaced by this single call to Parallel
+    results_list = Parallel(n_jobs=n_jobs)(
+        delayed(_fit_single_gene_glm)(
+            gene_name=genes[i],
+            gene_counts=data_c[:, i],
+            X=X,
+            X_null=X_null,
+            counts_=counts,
+            fixed_disp=fixed_disp,
+            fit_disp=fit_disp,
+            outlier_treshold=outlier_treshold,
+            n_harmonics=n_harmonics,
+        )
+        for i in tqdm(range(len(genes)), desc="Fitting genes")
+    )
+
+    # --- The cleanup and final dataframe creation is the same ---
+    # Filter out None results from failed genes before creating the DataFrame
+    results_list = [r for r in results_list if r is not None]
+    if not results_list:
+        print("Warning: All gene fits failed.")
+        return pd.DataFrame()
+
+    params_g = pd.DataFrame(results_list).set_index("gene")
+
+    params_g["pvalue_correctedBH"] = benjamini_hochberg_correction(
+        params_g["pvalue"].values
+    )
+    params_g = Beta(params_g)
+    params_g.get_amp(inplace=True)
+
+    if use_mi:
+        print("computing Mutual Information...")
+        mi = compute_mutual_information(data, phases, genes)
+        params_g["mi"] = mi
+
+    return params_g
+
+
+# Helper "worker" function to be parallelized
+def _fit_single_gene_glm(
+    gene_name,
+    gene_counts,
+    X,
+    X_null,
+    counts_,
+    fixed_disp,
+    fit_disp,
+    outlier_treshold,
+    n_harmonics,
+):
+    """Fits the GLM for a single gene. To be called by the parallelized main function."""
+    try:
+        threshold = np.percentile(gene_counts, outlier_treshold)
+        mask = gene_counts <= threshold
+
+        if mask.sum() == 0:
+            # Return None if the gene cannot be processed
+            return None
+
+        gene_counts = gene_counts[mask]
+        counts_ = counts_[mask]
+
+        # In case I am using bulk data, which has a gene dependent offset
+        if isinstance(counts_, pd.DataFrame):
+            counts_ = counts_[gene_name].values
+
+        # Select the correct model type based on fit_disp
+        if fit_disp:
+            model = NegativeBinomial(gene_counts, X[mask], offset=np.log(counts_))
+            model_null = NegativeBinomial(
+                gene_counts, X_null[mask], offset=np.log(counts_)
+            )
+        else:
+            # Add a pseudocount to prevent log(0) errors
+            pseudocount = 1e-8
+            model = sm.GLM(
+                gene_counts,
+                X[mask],
+                family=sm.families.NegativeBinomial(alpha=fixed_disp),
+                offset=np.log(counts_ + pseudocount),
+            )
+            model_null = sm.GLM(
+                gene_counts,
+                X_null[mask],
+                family=sm.families.NegativeBinomial(alpha=fixed_disp),
+                offset=np.log(counts_ + pseudocount),
+            )
+
+        result = model.fit(disp=False)
+        result_null = model_null.fit(disp=False)
+
+        llr = 2 * (result.llf - result_null.llf)
+        pval = 1 - chi2.cdf(llr, 2)
+        bic = -2 * result.llf + np.log(len(gene_counts)) * (len(result.params) + 1)
+        bic_null = -2 * result_null.llf + np.log(len(gene_counts)) * (
+            len(result_null.params) + 1
+        )
+        delta_bic = bic - bic_null
+
+        # Using McFadden's pseudo-R-squared
+        r2 = 1 - (result.llf / result_null.llf)
+
+        result_dict = {"gene": gene_name, "r2": r2}
+        param_values = result.params.to_dict()
+        result_dict.update(param_values)
+
+        if fit_disp:
+            result_dict["disp"] = result.params.iloc[-1]
+        else:
+            result_dict["disp"] = fixed_disp
+
+        result_dict["BIC"] = delta_bic
+        result_dict["pvalue"] = pval
+
+        return result_dict
+
+    except Exception as e:
+        # Build a dictionary with NaNs for failed fits
+        print(f"Warning: Could not fit model for gene {gene_name}: {str(e)}")
+        result_dict = {"gene": gene_name}
+        for h in range(1, n_harmonics + 1):
+            result_dict[f"a_{h}"] = np.nan
+            result_dict[f"b_{h}"] = np.nan
+        result_dict["a_0"] = np.nan
+        result_dict["disp"] = np.nan if fit_disp else fixed_disp
+        result_dict["pvalue"] = np.nan
+        result_dict["BIC"] = np.nan
+        result_dict["r2"] = np.nan
+        return result_dict
 
 
 def glm_gene_fit(
@@ -138,6 +321,9 @@ def glm_gene_fit(
             continue
 
         gene_counts = gene_counts[mask]
+        if gene_counts.sum() == 0:
+            continue
+
         counts_ = counts[mask]
 
         # Fit the models using statsmodels
@@ -193,6 +379,8 @@ def glm_gene_fit(
 
             result_dict["BIC"] = delta_bic
             result_dict["pvalue"] = pval
+            result_dict["r2"] = 1 - (result.llf / result_null.llf)
+
             # result_dict["outlier_driven"] = simple_outlier_detector(gene_counts)
             results_list.append(result_dict)
 
@@ -207,6 +395,8 @@ def glm_gene_fit(
             result_dict["disp"] = np.nan if fit_disp else fixed_disp
             result_dict["pvalue"] = np.nan
             result_dict["BIC"] = np.nan
+            result_dict["r2"] = np.nan
+
             results_list.append(result_dict)
             continue
 
@@ -321,6 +511,7 @@ def lm_gene_fit(
 
         d["BIC"] = delta_bic
         d["pvalue"] = p_val
+        d["r2"] = res.rsquared
 
         results.append(d)
 
