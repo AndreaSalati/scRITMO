@@ -245,7 +245,6 @@ clock = np.array(
 # core clock , with Ciart
 ccg = np.array(
     [
-        "Arntl",
         "Npas2",
         "Cry1",
         "Per1",

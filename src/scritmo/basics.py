@@ -142,3 +142,10 @@ def mean_disp_to_np(mean, dispersion):
     p = mean / (mean + dispersion * mean**2)
     n = 1 / dispersion
     return n, p
+
+
+def add_ccg_back(ccg, listt):
+    diff = set(ccg) - set(listt)
+    print(f"ccg removed in the selection {diff}")
+    added = set(listt) | set(diff)
+    return np.array(list(added))

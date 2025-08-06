@@ -12,6 +12,7 @@ from .beta import Beta
 
 from scipy.stats import vonmises
 
+
 def xy():
     plt.axline(
         (0, 0),
@@ -691,10 +692,10 @@ def plot_phase_polar(
     phase,
     sample_name=None,
     amplitude=None,
-    plot_type='density',
-    cmap_name='twilight',
+    plot_type="density",
+    cmap_name="twilight",
     bins=30,
-    ylim=None
+    ylim=None,
 ):
     """
     Polar plots of phase data for each cell type.
@@ -718,16 +719,16 @@ def plot_phase_polar(
         Number of bins for histogram (only if plot_type='histogram').
     """
     # validate inputs
-    if plot_type == 'density' and sample_name is None:
+    if plot_type == "density" and sample_name is None:
         raise ValueError("`sample_name` is required for density plots")
-    if plot_type == 'scatter' and amplitude is None:
+    if plot_type == "scatter" and amplitude is None:
         raise ValueError("`amplitude` is required for scatter plots")
 
     cell_types = np.unique(cell_type)
     cmap = plt.get_cmap(cmap_name)
 
     for ct in cell_types:
-        mask_ct = (cell_type == ct)
+        mask_ct = cell_type == ct
         times_ct = time[mask_ct]
         phases_ct = phase[mask_ct]
         samples_ct = sample_name[mask_ct] if sample_name is not None else None
@@ -735,13 +736,13 @@ def plot_phase_polar(
         zts = np.unique(times_ct)
 
         # set up polar axes
-        fig, ax = plt.subplots(subplot_kw={'projection': 'polar'})
+        fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
         ax.set_rorigin(-0.3)
-        ax.set_theta_zero_location('N')
+        ax.set_theta_zero_location("N")
         ax.set_theta_direction(-1)
         ax.grid(False)
 
-        if plot_type == 'scatter':
+        if plot_type == "scatter":
             max_amp = np.max(amps_ct)
             ticks = np.linspace(0, max_amp, num=5)
             ax.set_yticks(ticks)
@@ -761,40 +762,195 @@ def plot_phase_polar(
         for i, zt in enumerate(zts):
             color = base_colors[i]
             theta_ref = 2 * np.pi * (zt % 24) / 24
-            ax.plot([theta_ref, theta_ref], [0, ax.get_rmax()],
-                    linestyle='--', color=color, linewidth=1.5)
+            ax.plot(
+                [theta_ref, theta_ref],
+                [0, ax.get_rmax()],
+                linestyle="--",
+                color=color,
+                linewidth=1.5,
+            )
 
-            mask_zt = (times_ct == zt)
+            mask_zt = times_ct == zt
             ph = phases_ct[mask_zt]
 
-            if plot_type == 'density':
+            if plot_type == "density":
                 for j, sam in enumerate(np.unique(samples_ct[mask_zt])):
                     ph_s = ph[samples_ct[mask_zt] == sam]
                     if len(ph_s) > 1:
                         # fit returns (kappa, loc, scale)
-                        kappa, loc, scale = vonmises.fit(ph_s, method='analytical')
+                        kappa, loc, scale = vonmises.fit(ph_s, method="analytical")
                         dens = vonmises.pdf(theta_vals, kappa, loc=loc, scale=scale)
-                        alpha_fill = np.linspace(0.2, 0.6, len(np.unique(samples_ct[mask_zt])))[j]
-                        alpha_line = np.linspace(0.5, 1.0, len(np.unique(samples_ct[mask_zt])))[j]
-                        lw = np.linspace(0.8, 1.8, len(np.unique(samples_ct[mask_zt])))[j]
-                        ax.fill_between(theta_vals, 0, dens, color=color, alpha=alpha_fill)
-                        ax.plot(theta_vals, dens, color=color, alpha=alpha_line, linewidth=lw)
+                        alpha_fill = np.linspace(
+                            0.2, 0.6, len(np.unique(samples_ct[mask_zt]))
+                        )[j]
+                        alpha_line = np.linspace(
+                            0.5, 1.0, len(np.unique(samples_ct[mask_zt]))
+                        )[j]
+                        lw = np.linspace(0.8, 1.8, len(np.unique(samples_ct[mask_zt])))[
+                            j
+                        ]
+                        ax.fill_between(
+                            theta_vals, 0, dens, color=color, alpha=alpha_fill
+                        )
+                        ax.plot(
+                            theta_vals,
+                            dens,
+                            color=color,
+                            alpha=alpha_line,
+                            linewidth=lw,
+                        )
                     else:
-                        ax.plot(ph_s, 0.1, 'o', color=color, alpha=0.9, markersize=4)
+                        ax.plot(ph_s, 0.1, "o", color=color, alpha=0.9, markersize=4)
 
-            elif plot_type == 'scatter':
-                ax.scatter(ph, amps_ct[mask_zt], s=10, color=color,
-                           alpha=0.2, edgecolors='none')
-                #change ylim
+            elif plot_type == "scatter":
+                ax.scatter(
+                    ph,
+                    amps_ct[mask_zt],
+                    s=10,
+                    color=color,
+                    alpha=0.2,
+                    edgecolors="none",
+                )
+                # change ylim
                 if ylim is not None:
                     ax.set_ylim(0, ylim)
 
-            elif plot_type == 'histogram':
-                ax.hist(ph, bins=bins, density=True, alpha=0.5,
-                        color=color, label=f"{zt}h")
+            elif plot_type == "histogram":
+                ax.hist(
+                    ph,
+                    bins=bins,
+                    density=True,
+                    alpha=0.5,
+                    color=color,
+                    label=f"{zt:.0f}h",
+                )
 
-        ax.set_title(f"{ct} – {plot_type.capitalize()} Plot", va='bottom')
-        if plot_type == 'histogram':
-            ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1.1))
+        ax.set_title(f"{ct} – {plot_type.capitalize()} Plot", va="bottom")
+        if plot_type == "histogram":
+            ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
         plt.tight_layout()
         plt.show()
+
+
+def plot_phase_polar_single_ct(
+    ct,
+    cell_type,
+    time,
+    phase,
+    sample_name=None,
+    amplitude=None,
+    plot_type="density",
+    cmap_name="twilight",
+    bins=30,
+    ylim=None,
+):
+    """
+    same thing as before, jsut returns the ax and fig objects
+    and does one gene at the time
+    """
+    # validate inputs
+    if plot_type == "density" and sample_name is None:
+        raise ValueError("`sample_name` is required for density plots")
+    if plot_type == "scatter" and amplitude is None:
+        raise ValueError("`amplitude` is required for scatter plots")
+
+    cmap = plt.get_cmap(cmap_name)
+
+    mask_ct = cell_type == ct
+    times_ct = time[mask_ct]
+    phases_ct = phase[mask_ct]
+    samples_ct = sample_name[mask_ct] if sample_name is not None else None
+    amps_ct = amplitude[mask_ct] if amplitude is not None else None
+    zts = np.unique(times_ct)
+
+    # set up polar axes
+    fig, ax = plt.subplots(subplot_kw={"projection": "polar"})
+    ax.set_rorigin(-0.3)
+    ax.set_theta_zero_location("N")
+    ax.set_theta_direction(-1)
+    ax.grid(False)
+
+    if plot_type == "scatter":
+        max_amp = np.max(amps_ct)
+        ticks = np.linspace(0, max_amp, num=5)
+        ax.set_yticks(ticks)
+        ax.set_ylim(0, max_amp * 1.1)
+    else:
+        ax.set_yticklabels([])
+
+    # angular ticks every 6h
+    hour_ticks = np.arange(0, 24, 6)
+    angles = 2 * np.pi * hour_ticks / 24
+    ax.set_xticks(angles)
+    ax.set_xticklabels([f"ZT{h:02d}" for h in hour_ticks], fontsize=10)
+
+    base_colors = cmap(np.linspace(0, 1, len(zts), endpoint=False))
+    theta_vals = np.linspace(0, 2 * np.pi, 200, endpoint=False)
+
+    for i, zt in enumerate(zts):
+        color = base_colors[i]
+        theta_ref = 2 * np.pi * (zt % 24) / 24
+        ax.plot(
+            [theta_ref, theta_ref],
+            [0, ax.get_rmax()],
+            linestyle="--",
+            color=color,
+            linewidth=1.5,
+        )
+
+        mask_zt = times_ct == zt
+        ph = phases_ct[mask_zt]
+
+        if plot_type == "density":
+            for j, sam in enumerate(np.unique(samples_ct[mask_zt])):
+                ph_s = ph[samples_ct[mask_zt] == sam]
+                if len(ph_s) > 1:
+                    # fit returns (kappa, loc, scale)
+                    kappa, loc, scale = vonmises.fit(ph_s, method="analytical")
+                    dens = vonmises.pdf(theta_vals, kappa, loc=loc, scale=scale)
+                    alpha_fill = np.linspace(
+                        0.2, 0.6, len(np.unique(samples_ct[mask_zt]))
+                    )[j]
+                    alpha_line = np.linspace(
+                        0.5, 1.0, len(np.unique(samples_ct[mask_zt]))
+                    )[j]
+                    lw = np.linspace(0.8, 1.8, len(np.unique(samples_ct[mask_zt])))[j]
+                    ax.fill_between(theta_vals, 0, dens, color=color, alpha=alpha_fill)
+                    ax.plot(
+                        theta_vals,
+                        dens,
+                        color=color,
+                        alpha=alpha_line,
+                        linewidth=lw,
+                    )
+                else:
+                    ax.plot(ph_s, 0.1, "o", color=color, alpha=0.9, markersize=4)
+
+        elif plot_type == "scatter":
+            ax.scatter(
+                ph,
+                amps_ct[mask_zt],
+                s=10,
+                color=color,
+                alpha=0.2,
+                edgecolors="none",
+            )
+            # change ylim
+            if ylim is not None:
+                ax.set_ylim(0, ylim)
+
+        elif plot_type == "histogram":
+            ax.hist(
+                ph,
+                bins=bins,
+                density=True,
+                alpha=0.5,
+                color=color,
+                label=f"{zt:.0f}h",
+            )
+
+    ax.set_title(f"{ct} – {plot_type.capitalize()} Plot", va="bottom")
+    if plot_type == "histogram":
+        ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
+    plt.tight_layout()
+    return fig, ax
