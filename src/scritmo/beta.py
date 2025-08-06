@@ -583,7 +583,7 @@ class Beta(pd.DataFrame):
         # 5) reindex and return
         return self.reindex(columns=data_cols_sorted + meta_cols)
 
-    def plot_circular_adjust(self, nh, beta2=None, mode="max-min"):
+    def plot_circular_adjust(self, beta2=None, mode="max-min"):
         """
         Make a circular plot for the betas, with non-overlapping labels using adjustText.
         """
@@ -621,7 +621,7 @@ class Beta(pd.DataFrame):
 
         # --- optionally compute & plot second beta set ---
         if beta2 is not None:
-            amp2 = beta2.get_amp(nh=nh)
+            amp2 = beta2.get_amp()
             if mode == "max-min":
                 phi2 = amp2["phase"]
                 r2 = (amp2["y_max"] - amp2["y_min"]) / 2
