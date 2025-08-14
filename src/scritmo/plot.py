@@ -9,16 +9,17 @@ import matplotlib.gridspec as gridspec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from adjustText import adjust_text
 from .beta import Beta
+import seaborn as sns
 
 from scipy.stats import vonmises
 
 
-def xy():
+def xy(color="red", linestyle="--"):
     plt.axline(
         (0, 0),
         slope=1,
-        color="red",
-        linestyle="--",
+        color=color,
+        linestyle=linestyle,
     )
 
 
@@ -762,13 +763,13 @@ def plot_phase_polar(
         for i, zt in enumerate(zts):
             color = base_colors[i]
             theta_ref = 2 * np.pi * (zt % 24) / 24
-            ax.plot(
-                [theta_ref, theta_ref],
-                [0, ax.get_rmax()],
-                linestyle="--",
-                color=color,
-                linewidth=1.5,
-            )
+            # ax.plot(
+            #     [theta_ref, theta_ref],
+            #     [0, ax.get_rmax()],
+            #     linestyle="--",
+            #     color=color,
+            #     linewidth=1.5,
+            # )
 
             mask_zt = times_ct == zt
             ph = phases_ct[mask_zt]
@@ -825,6 +826,17 @@ def plot_phase_polar(
                     label=f"{zt:.0f}h",
                 )
 
+        rmax = ax.get_rmax()
+        # print(f"rmax: {rmax}")
+        for i, zt in enumerate(zts):
+            theta_ref = 2 * np.pi * (zt % 24) / 24
+            ax.plot(
+                [theta_ref, theta_ref],
+                [0, rmax],
+                linestyle="--",
+                color=color,
+                linewidth=1.5,
+            )
         ax.set_title(f"{ct} – {plot_type.capitalize()} Plot", va="bottom")
         if plot_type == "histogram":
             ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
@@ -948,9 +960,175 @@ def plot_phase_polar_single_ct(
                 color=color,
                 label=f"{zt:.0f}h",
             )
+    rmax = ax.get_rmax()
+    for i, zt in enumerate(zts):
+        color = base_colors[i]
+        theta_ref = 2 * np.pi * (zt % 24) / 24
+        ax.plot(
+            [theta_ref, theta_ref],
+            [0, rmax],
+            linestyle="--",
+            color=color,
+            linewidth=1.5,
+        )
 
     ax.set_title(f"{ct} – {plot_type.capitalize()} Plot", va="bottom")
     if plot_type == "histogram":
         ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
     plt.tight_layout()
     return fig, ax
+
+
+def plot_cae_per_sample(sample_name, time_mod, cad, plot_dir):
+    """
+    Generates and saves a boxplot with jitter points showing the Circular
+    Absolute Error (CAE) for each sample, grouped by external phase.
+
+    This function annotates each box with the Median Absolute Error (MAE).
+
+    Parameters:
+    ----------
+    sample_name:
+
+    time_mod : np.ndarray
+        A NumPy array indicating the external phase (e.g., ZT) for each cell.
+        Must be the same length as the number of cells in `adata`.
+
+    cad : np.ndarray
+        A NumPy array containing the Circular Absolute Distance/Error values
+        for each cell. Must be the same length as `time_mod`.
+
+    plot_dir : str
+        The directory path where the output plot 'jitter_plot.pdf' will be saved.
+        The path should end with a '/'.
+    """
+    # --- Data Preparation ---
+    sample_name_ct = sample_name
+    unique_phases = np.unique(time_mod)
+
+    # Lists to hold data for plotting
+    cad_grouped = []
+    labels = []
+    colors = []
+    mae_annotations = []
+    x_scatter = []
+    y_scatter = []
+    c_scatter = []
+
+    # Get a color map for the different phases
+    cmap = plt.colormaps["twilight"]
+    phase_colors = cmap(np.linspace(0, 1, len(unique_phases), endpoint=False))
+
+    # --- Group Data by Phase and Sample ---
+    for i, phase in enumerate(unique_phases):
+        samples_in_phase = np.unique(sample_name_ct[time_mod == phase])
+        n_samples = len(samples_in_phase)
+        base_color = phase_colors[i]
+        # Create different alpha levels for samples within the same phase
+        alphas = np.linspace(0.4, 0.8, n_samples)
+
+        for j, sample in enumerate(samples_in_phase):
+            # Create a mask to select cells for the current phase and sample
+            mask = (time_mod == phase) & (sample_name_ct == sample)
+            cad_per_sample = cad[mask] * rh
+            cad_grouped.append(cad_per_sample)
+
+            # Create a label for the x-axis tick
+            labels.append(f"ZT{int(phase)}\n{sample}")
+
+            # Assign a unique color with a specific alpha
+            current_color = (*base_color[:3], alphas[j])
+            colors.append(current_color)
+
+            # Compute Median Absolute Error for this sample's annotation
+            mae = np.median(cad_per_sample)
+            box_index = len(cad_grouped)  # 1-based index for plotting
+            mae_annotations.append((box_index, f"MAE={mae:.2f}h"))
+
+            # Generate jittered x-coordinates for the scatter plot
+            xs = box_index + np.random.uniform(-0.15, 0.15, size=len(cad_per_sample))
+            x_scatter.extend(xs)
+            y_scatter.extend(cad_per_sample)
+            c_scatter.extend([current_color] * len(cad_per_sample))
+
+    # --- Plotting ---
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Create the boxplot
+    bp = ax.boxplot(cad_grouped, patch_artist=True, showfliers=False)
+
+    # Set the face color for each box
+    for patch, color in zip(bp["boxes"], colors):
+        patch.set_facecolor(color)
+
+    # Overlay the jittered scatter plot
+    ax.scatter(x_scatter, y_scatter, color=c_scatter, alpha=0.6, s=12, edgecolor="none")
+
+    # Add MAE annotations above each box
+    for x_pos, text in mae_annotations:
+        # Position the text relative to the max value of the data in the box
+        ymax = np.max(cad_grouped[x_pos - 1])
+        ax.text(x_pos, ymax * 0.9, text, ha="center", va="top", fontsize=8)
+
+    # --- Final Touches ---
+    ax.set_xticks(np.arange(1, len(labels) + 1))
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.set_ylabel("Circular Absolute Error (h)")
+    ax.set_title("CAE per Sample within Each External Phase—with per-sample MAE")
+    plt.tight_layout()
+    return fig, ax
+
+
+def amp_inflation_plot(params_g, par_refit, mask_pval, mask_inf, full_name_titles=""):
+    """
+    Creates a jointplot with a main scatter and a second scatter for outliers,
+    with a combined legend.
+
+    Args:
+        params_g (dict): Dictionary containing the initial data.
+        par_refit (dict): Dictionary containing the refitted data.
+        mask_pval (np.array): Boolean mask for p-value filtering.
+        mask_inf (np.array): Boolean mask for inference genes.
+        full_name_titles (str): Title suffix for the plot.
+
+    Returns:
+        tuple: A tuple containing the matplotlib Figure and Axes objects.
+    """
+    x = params_g["amp"][mask_pval][~mask_inf]
+    y = par_refit["amp"][mask_pval][~mask_inf]
+
+    x_inf = params_g["amp"][mask_pval][mask_inf]
+    y_inf = par_refit["amp"][mask_pval][mask_inf]
+
+    # Create the initial jointplot
+    g = sns.jointplot(
+        x=x,
+        y=y,
+        alpha=0.5,
+    )
+
+    # Plot the second scatter plot for the outliers
+    g.ax_joint.scatter(x_inf, y_inf, color="orange", s=20, label="Inference genes")
+
+    # Add the KDE plot and a diagonal line
+    g.plot_joint(sns.kdeplot, color="r", zorder=1, levels=6, alpha=1)
+    g.ax_joint.plot(g.ax_joint.get_xlim(), g.ax_joint.get_ylim(), ls="--", c=".3")
+
+    # Set titles and labels
+    g.figure.suptitle(f"Amp inflation {full_name_titles}")
+    g.ax_joint.set_xlabel("Initial Amp")
+    g.ax_joint.set_ylabel("Inferred Amp")
+    plt.tight_layout()
+
+    # Manually create the legend
+    handles, labels = g.ax_joint.get_legend_handles_labels()
+
+    # Add the rhythmic genes label, which is the first collection in the jointplot
+    handles.insert(0, g.ax_joint.collections[0])
+    labels.insert(0, "Rhythmic genes")
+
+    # Set the combined legend
+    g.ax_joint.legend(handles, labels)
+
+    # Return the figure and axes
+    return g.fig, g.ax_joint

@@ -14,103 +14,6 @@ from joblib import Parallel, delayed
 from functools import partial
 
 
-def glm_gene_fit_parallel(
-    data,
-    phases,
-    genes=None,
-    counts=None,
-    fixed_disp=0.1,
-    fit_disp=False,
-    layer=None,
-    n_harmonics=1,
-    outlier_treshold=100.0,
-    use_mi=None,
-    n_jobs=-1,  # Add n_jobs parameter
-):
-    """
-    Fits gene expression data to a harmonic model using statsmodels (Parallelized).
-
-    make sure you add at the beginning of the notebook/script:
-
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"
-    os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-    os.environ["NUMEXPR_NUM_THREADS"] = "1"
-
-    This permits the parallelizatio to work. For docstrings look at
-    glm_gene_fit
-    """
-
-    # --- All the setup code remains the same ---
-    if genes is None:
-        genes = data.var_names.tolist()
-    else:
-        genes = [gene for gene in genes if gene in data.var_names]
-        if len(genes) == 0:
-            raise ValueError("None of the specified genes were found in AnnData object")
-
-    if layer is None:
-        data_c = data[:, genes].X
-    else:
-        data_c = data[:, genes].layers[layer]
-
-    try:
-        data_c = data_c.toarray()
-    except AttributeError:
-        pass
-
-    if counts is None:
-        total_counts = (
-            data.X.sum(axis=1) if layer is None else data.layers[layer].sum(axis=1)
-        )
-        try:
-            counts = total_counts.A1
-        except AttributeError:
-            counts = total_counts
-
-    X = create_harmonic_design_matrix(phases.squeeze(), n_harmonics=n_harmonics)
-    X_null = create_harmonic_design_matrix(phases.squeeze(), 0)
-
-    # --- This is the new parallelized part ---
-    # The for loop is replaced by this single call to Parallel
-    results_list = Parallel(n_jobs=n_jobs)(
-        delayed(_fit_single_gene_glm)(
-            gene_name=genes[i],
-            gene_counts=data_c[:, i],
-            X=X,
-            X_null=X_null,
-            counts_=counts,
-            fixed_disp=fixed_disp,
-            fit_disp=fit_disp,
-            outlier_treshold=outlier_treshold,
-            n_harmonics=n_harmonics,
-        )
-        for i in tqdm(range(len(genes)), desc="Fitting genes")
-    )
-
-    # --- The cleanup and final dataframe creation is the same ---
-    # Filter out None results from failed genes before creating the DataFrame
-    results_list = [r for r in results_list if r is not None]
-    if not results_list:
-        print("Warning: All gene fits failed.")
-        return pd.DataFrame()
-
-    params_g = pd.DataFrame(results_list).set_index("gene")
-
-    params_g["pvalue_correctedBH"] = benjamini_hochberg_correction(
-        params_g["pvalue"].values
-    )
-    params_g = Beta(params_g)
-    params_g.get_amp(inplace=True)
-
-    if use_mi:
-        print("computing Mutual Information...")
-        mi = compute_mutual_information_classif(data, phases, genes)
-        params_g["mi"] = mi
-
-    return params_g
-
 
 # Helper "worker" function to be parallelized
 def _fit_single_gene_glm(
@@ -304,6 +207,198 @@ def glm_gene_fit(
         params_g["mi"] = mi
 
     return params_g
+
+
+
+def glm_gene_fit_parallel(
+    data,
+    phases,
+    genes=None,
+    counts=None,
+    fixed_disp=0.1,
+    fit_disp=False,
+    layer=None,
+    n_harmonics=1,
+    outlier_treshold=100.0,
+    use_mi=None,
+    n_jobs=-1,  # Add n_jobs parameter
+):
+    """
+    Fits gene expression data to a harmonic model using statsmodels (Parallelized).
+
+    make sure you add at the beginning of the notebook/script:
+
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+    This permits the parallelization to work. For docstrings look at
+    glm_gene_fit
+    """
+
+    # --- All the setup code remains the same ---
+    if genes is None:
+        genes = data.var_names.tolist()
+    else:
+        genes = [gene for gene in genes if gene in data.var_names]
+        if len(genes) == 0:
+            raise ValueError("None of the specified genes were found in AnnData object")
+
+    if layer is None:
+        data_c = data[:, genes].X
+    else:
+        data_c = data[:, genes].layers[layer]
+
+    try:
+        data_c = data_c.toarray()
+    except AttributeError:
+        pass
+
+    if counts is None:
+        total_counts = (
+            data.X.sum(axis=1) if layer is None else data.layers[layer].sum(axis=1)
+        )
+        try:
+            counts = total_counts.A1
+        except AttributeError:
+            counts = total_counts
+
+    X = create_harmonic_design_matrix(phases.squeeze(), n_harmonics=n_harmonics)
+    X_null = create_harmonic_design_matrix(phases.squeeze(), 0)
+
+    # --- This is the new parallelized part ---
+    # The for loop is replaced by this single call to Parallel
+    results_list = Parallel(n_jobs=n_jobs)(
+        delayed(_fit_single_gene_glm)(
+            gene_name=genes[i],
+            gene_counts=data_c[:, i],
+            X=X,
+            X_null=X_null,
+            counts_=counts,
+            fixed_disp=fixed_disp,
+            fit_disp=fit_disp,
+            outlier_treshold=outlier_treshold,
+            n_harmonics=n_harmonics,
+        )
+        for i in tqdm(range(len(genes)), desc="Fitting genes")
+    )
+
+    # --- The cleanup and final dataframe creation is the same ---
+    # Filter out None results from failed genes before creating the DataFrame
+    results_list = [r for r in results_list if r is not None]
+    if not results_list:
+        print("Warning: All gene fits failed.")
+        return pd.DataFrame()
+
+    params_g = pd.DataFrame(results_list).set_index("gene")
+
+    params_g["pvalue_correctedBH"] = benjamini_hochberg_correction(
+        params_g["pvalue"].values
+    )
+    params_g = Beta(params_g)
+    params_g.get_amp(inplace=True)
+
+    if use_mi:
+        print("computing Mutual Information...")
+        mi = compute_mutual_information_classif(data, phases, genes)
+        params_g["mi"] = mi
+
+    return params_g
+
+
+# def glm_gene_fit(
+#     data,
+#     phases,
+#     genes=None,
+#     counts=None,
+#     fixed_disp=0.1,
+#     fit_disp=False,
+#     layer=None,
+#     n_harmonics=1,
+#     outlier_treshold=98.0,
+#     use_mi=None,
+#     n_jobs=-1,
+# ):
+#     """
+#     Fits gene expression data to a harmonic model using statsmodels.
+#     Runs in parallel if n_jobs != 1.
+#     ... (rest of docstring) ...
+#     """
+#     # --- All the initial data setup remains the same ---
+#     if genes is None:
+#         genes = data.var_names.tolist()
+#     else:
+#         genes = [gene for gene in genes if gene in data.var_names]
+#         if not genes:
+#             raise ValueError("None of the specified genes were found in AnnData object")
+
+#     if layer is None:
+#         data_c = data[:, genes].X
+#     else:
+#         data_c = data[:, genes].layers[layer]
+
+#     try:
+#         data_c = data_c.toarray()
+#     except AttributeError:
+#         pass
+
+#     if counts is None:
+#         total_counts = (
+#             data.X.sum(axis=1) if layer is None else data.layers[layer].sum(axis=1)
+#         )
+#         try:
+#             counts = total_counts.A1
+#         except AttributeError:
+#             counts = total_counts
+
+#     X = create_harmonic_design_matrix(phases.squeeze(), n_harmonics=n_harmonics)
+#     X_null = create_harmonic_design_matrix(phases.squeeze(), 0)
+
+#     # --- Create the "slim" partial function ---
+#     # Pre-fill all arguments that are the same for every gene
+
+#     fit_function = partial(
+#         _fit_single_gene_glm,
+#         X=X,
+#         X_null=X_null,
+#         counts_=counts,
+#         fixed_disp=fixed_disp,
+#         fit_disp=fit_disp,
+#         outlier_treshold=outlier_treshold,
+#         n_harmonics=n_harmonics,
+#     )
+
+#     print("Running in serial mode.")
+#     # Use a simple list comprehension for the serial version
+#     results_list = [
+#         fit_function(gene_name=genes[i], gene_counts=data_c[:, i])
+#         for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
+#     ]
+
+#     # --- The final cleanup and DataFrame creation remains the same ---
+#     results_list = [r for r in results_list if r is not None]
+#     if not results_list:
+#         print("Warning: All gene fits failed.")
+#         return pd.DataFrame()
+
+#     params_g = pd.DataFrame(results_list).set_index("gene")
+
+#     params_g["pvalue_correctedBH"] = benjamini_hochberg_correction(
+#         params_g["pvalue"].values
+#     )
+#     params_g = Beta(params_g)
+#     params_g.get_amp(inplace=True)
+
+#     if use_mi:
+#         print("computing Mutual Information...")
+#         # Note: You might need to adjust the gene list for MI if some fits failed
+#         valid_genes = params_g.index.tolist()
+#         mi = compute_mutual_information(data, phases, valid_genes)
+#         params_g["mi"] = mi
+
+#     return params_g
 
 
 def lm_gene_fit(

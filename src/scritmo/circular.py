@@ -3,7 +3,7 @@ from scipy.stats import circmean, circstd, circvar
 import pandas as pd
 
 
-# metrics to evaluate the performance of the model
+# error metrics for circular data
 def circular_deviation(x, y, period):
     """
     It computes the circular absolute deviation between two vectors x and y
@@ -51,6 +51,42 @@ def circular_sqrt_mean_squared_error(x, y, period):
     """
     v = circular_deviation(x, y, period)
     return np.sqrt(np.mean(v**2))
+
+
+# dispersion estimators for circular data
+
+
+def R(theta, adjust=False):
+    """
+    Computes the resultant length R for a set of angles.
+    R = |sum(exp(i*theta))| / N
+    """
+    n = theta.shape[0]
+    R = np.abs(np.sum(np.exp(1j * theta))) / n
+    if adjust:
+        # Adjust R to be in the range [0, 1]
+        R = R - (1 - R**2) / (2 * n * R)
+    return R
+
+
+def cVAR(theta, adjust=False):
+    """
+    Computes the circular dispersion for a set of angles.
+    Dispersion = 1 - R
+    """
+    R_value = R(theta, adjust=adjust)
+    return 1 - R_value
+
+
+def cSTD(theta, adjust=False):
+    """
+    Computes the circular standard deviation for a set of angles.
+    STD = sqrt(-2 * log(R))
+    """
+    R_value = R(theta, adjust=adjust)
+    if R_value == 0:
+        return np.inf  # Handle case where R is zero
+    return np.sqrt(-2 * np.log(R_value))
 
 
 def optimal_shift(
@@ -241,7 +277,7 @@ def get_shift_y(ext_time, ph, context):
     for i, ct in enumerate(context_u):
         mask = context == ct
         tp_ct = ext_time[mask]
-        delta = sr.optimal_shift(ph[mask], tp_ct, return_shift_only=True)
+        delta = optimal_shift(ph[mask], tp_ct, return_shift_only=True)
         if delta > np.pi:
             delta -= 2 * np.pi
 
