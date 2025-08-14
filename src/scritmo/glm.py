@@ -14,7 +14,6 @@ from joblib import Parallel, delayed
 from functools import partial
 
 
-
 # Helper "worker" function to be parallelized
 def _fit_single_gene_glm(
     gene_name,
@@ -209,235 +208,73 @@ def glm_gene_fit(
     return params_g
 
 
-
-def glm_gene_fit_parallel(
-    data,
-    phases,
-    genes=None,
-    counts=None,
-    fixed_disp=0.1,
-    fit_disp=False,
-    layer=None,
-    n_harmonics=1,
-    outlier_treshold=100.0,
-    use_mi=None,
-    n_jobs=-1,  # Add n_jobs parameter
+# Helper "worker" function to be parallelized for LM (NEW)
+def _fit_single_gene_lm(
+    gene_name, gene_expression, X, X_null, outlier_treshold, n_harmonics
 ):
-    """
-    Fits gene expression data to a harmonic model using statsmodels (Parallelized).
-
-    make sure you add at the beginning of the notebook/script:
-
-    os.environ["OMP_NUM_THREADS"] = "1"
-    os.environ["MKL_NUM_THREADS"] = "1"
-    os.environ["OPENBLAS_NUM_THREADS"] = "1"
-    os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-    os.environ["NUMEXPR_NUM_THREADS"] = "1"
-
-    This permits the parallelization to work. For docstrings look at
-    glm_gene_fit
-    """
-
-    # --- All the setup code remains the same ---
-    if genes is None:
-        genes = data.var_names.tolist()
-    else:
-        genes = [gene for gene in genes if gene in data.var_names]
-        if len(genes) == 0:
-            raise ValueError("None of the specified genes were found in AnnData object")
-
-    if layer is None:
-        data_c = data[:, genes].X
-    else:
-        data_c = data[:, genes].layers[layer]
-
+    """Fits the OLS for a single gene. To be called by the parallelized main function."""
     try:
-        data_c = data_c.toarray()
-    except AttributeError:
-        pass
+        # Apply outlier thresholding
+        threshold = np.percentile(gene_expression, outlier_treshold)
+        mask = gene_expression <= threshold
 
-    if counts is None:
-        total_counts = (
-            data.X.sum(axis=1) if layer is None else data.layers[layer].sum(axis=1)
-        )
-        try:
-            counts = total_counts.A1
-        except AttributeError:
-            counts = total_counts
+        if mask.sum() == 0:
+            return None  # Skip gene if all values are outliers
 
-    X = create_harmonic_design_matrix(phases.squeeze(), n_harmonics=n_harmonics)
-    X_null = create_harmonic_design_matrix(phases.squeeze(), 0)
+        y = gene_expression[mask]
+        X_masked = X[mask]
+        X_null_masked = X_null[mask]
 
-    # --- This is the new parallelized part ---
-    # The for loop is replaced by this single call to Parallel
-    results_list = Parallel(n_jobs=n_jobs)(
-        delayed(_fit_single_gene_glm)(
-            gene_name=genes[i],
-            gene_counts=data_c[:, i],
-            X=X,
-            X_null=X_null,
-            counts_=counts,
-            fixed_disp=fixed_disp,
-            fit_disp=fit_disp,
-            outlier_treshold=outlier_treshold,
-            n_harmonics=n_harmonics,
-        )
-        for i in tqdm(range(len(genes)), desc="Fitting genes")
-    )
+        # Full model
+        mod = sm.OLS(y, X_masked)
+        res = mod.fit()
+        # Null model
+        mod0 = sm.OLS(y, X_null_masked)
+        res0 = mod0.fit()
 
-    # --- The cleanup and final dataframe creation is the same ---
-    # Filter out None results from failed genes before creating the DataFrame
-    results_list = [r for r in results_list if r is not None]
-    if not results_list:
-        print("Warning: All gene fits failed.")
-        return pd.DataFrame()
+        # Nested F-test
+        f_stat, p_val, _ = res.compare_f_test(res0)
+        # ΔBIC
+        delta_bic = res.bic - res0.bic
 
-    params_g = pd.DataFrame(results_list).set_index("gene")
+        # Collect params
+        result_dict = {"gene": gene_name}
+        param_values = res.params.to_dict()
+        result_dict.update(param_values)
+        result_dict["BIC"] = delta_bic
+        result_dict["pvalue"] = p_val
+        result_dict["r2"] = res.rsquared
 
-    params_g["pvalue_correctedBH"] = benjamini_hochberg_correction(
-        params_g["pvalue"].values
-    )
-    params_g = Beta(params_g)
-    params_g.get_amp(inplace=True)
+        return result_dict
 
-    if use_mi:
-        print("computing Mutual Information...")
-        mi = compute_mutual_information_classif(data, phases, genes)
-        params_g["mi"] = mi
-
-    return params_g
+    except Exception as e:
+        # Build a dictionary with NaNs for failed fits
+        print(f"Warning: Could not fit model for gene {gene_name}: {str(e)}")
+        result_dict = {"gene": gene_name}
+        for h in range(1, n_harmonics + 1):
+            result_dict[f"a_{h}"] = np.nan
+            result_dict[f"b_{h}"] = np.nan
+        result_dict["a_0"] = np.nan
+        result_dict["pvalue"] = np.nan
+        result_dict["BIC"] = np.nan
+        result_dict["r2"] = np.nan
+        return result_dict
 
 
-# def glm_gene_fit(
-#     data,
-#     phases,
-#     genes=None,
-#     counts=None,
-#     fixed_disp=0.1,
-#     fit_disp=False,
-#     layer=None,
-#     n_harmonics=1,
-#     outlier_treshold=98.0,
-#     use_mi=None,
-#     n_jobs=-1,
-# ):
-#     """
-#     Fits gene expression data to a harmonic model using statsmodels.
-#     Runs in parallel if n_jobs != 1.
-#     ... (rest of docstring) ...
-#     """
-#     # --- All the initial data setup remains the same ---
-#     if genes is None:
-#         genes = data.var_names.tolist()
-#     else:
-#         genes = [gene for gene in genes if gene in data.var_names]
-#         if not genes:
-#             raise ValueError("None of the specified genes were found in AnnData object")
-
-#     if layer is None:
-#         data_c = data[:, genes].X
-#     else:
-#         data_c = data[:, genes].layers[layer]
-
-#     try:
-#         data_c = data_c.toarray()
-#     except AttributeError:
-#         pass
-
-#     if counts is None:
-#         total_counts = (
-#             data.X.sum(axis=1) if layer is None else data.layers[layer].sum(axis=1)
-#         )
-#         try:
-#             counts = total_counts.A1
-#         except AttributeError:
-#             counts = total_counts
-
-#     X = create_harmonic_design_matrix(phases.squeeze(), n_harmonics=n_harmonics)
-#     X_null = create_harmonic_design_matrix(phases.squeeze(), 0)
-
-#     # --- Create the "slim" partial function ---
-#     # Pre-fill all arguments that are the same for every gene
-
-#     fit_function = partial(
-#         _fit_single_gene_glm,
-#         X=X,
-#         X_null=X_null,
-#         counts_=counts,
-#         fixed_disp=fixed_disp,
-#         fit_disp=fit_disp,
-#         outlier_treshold=outlier_treshold,
-#         n_harmonics=n_harmonics,
-#     )
-
-#     print("Running in serial mode.")
-#     # Use a simple list comprehension for the serial version
-#     results_list = [
-#         fit_function(gene_name=genes[i], gene_counts=data_c[:, i])
-#         for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
-#     ]
-
-#     # --- The final cleanup and DataFrame creation remains the same ---
-#     results_list = [r for r in results_list if r is not None]
-#     if not results_list:
-#         print("Warning: All gene fits failed.")
-#         return pd.DataFrame()
-
-#     params_g = pd.DataFrame(results_list).set_index("gene")
-
-#     params_g["pvalue_correctedBH"] = benjamini_hochberg_correction(
-#         params_g["pvalue"].values
-#     )
-#     params_g = Beta(params_g)
-#     params_g.get_amp(inplace=True)
-
-#     if use_mi:
-#         print("computing Mutual Information...")
-#         # Note: You might need to adjust the gene list for MI if some fits failed
-#         valid_genes = params_g.index.tolist()
-#         mi = compute_mutual_information(data, phases, valid_genes)
-#         params_g["mi"] = mi
-
-#     return params_g
-
-
+# UPDATED FUNCTION
 def lm_gene_fit(
     data,
     phases,
     genes=None,
     layer=None,
     n_harmonics=1,
+    outlier_treshold=100.0,  # Default to 100 to include all data
+    n_jobs=-1,
 ):
     """
     Fits log-transformed gene expression data to a harmonic model using OLS.
-
-    Parameters:
-    ----------
-    data : numpy.ndarray, pandas.DataFrame, or AnnData
-        Log-transformed expression matrix (samples × genes). If DataFrame,
-        genes should be columns. If AnnData, genes in var_names.
-    phases : array-like
-        Phases in radians for each sample (length = n_samples).
-    genes : list of str, optional
-        Subset of genes to fit. If None, use all in data.
-    layer : str, optional
-        If AnnData, which .layers[layer] to use; else adata.X.
-    n_harmonics : int, default=1
-        Number of harmonics to include (cos1/sin1, cos2/sin2, …).
-
-    Returns:
-    -------
-    params_g : pandas.DataFrame
-        Indexed by gene, with columns:
-        - a_0       intercept
-        - a_1, b_1  cos/sin coefficients (and a_2, b_2, … if n_harmonics>1)
-        - BIC       ΔBIC = BIC_full − BIC_null
-        - pvalue    from nested F-test
-        - amp       amplitude = √(a_1² + b_1²) (or max-minus-min/2 for ≥2)
-        - phase     phase in [0,2π)
-        - pvalue_correctedBH
+    Parallelized version.
     """
-
     # --- select gene list ---
     if hasattr(data, "var_names"):
         all_genes = list(data.var_names)
@@ -471,38 +308,149 @@ def lm_gene_fit(
     X = create_harmonic_design_matrix(phases, n_harmonics)
     X_null = create_harmonic_design_matrix(phases, 0)  # intercept only
 
-    results = []
-    for i, gene in enumerate(genes):
-        y = mat[:, i]
-        # full model
-        mod = sm.OLS(y, X)
-        res = mod.fit()
-        # null model
-        mod0 = sm.OLS(y, X_null)
-        res0 = mod0.fit()
-        # nested F-test
-        f_stat, p_val, _ = res.compare_f_test(res0)
-        # ΔBIC
-        delta_bic = res.bic - res0.bic
-        # collect params
-        d = {"gene": gene}
-        param_values = res.params.to_dict()
-        for k, v in param_values.items():
-            d[k] = v
+    # --- Create the partial function for parallel execution ---
+    fit_function = partial(
+        _fit_single_gene_lm,
+        X=X,
+        X_null=X_null,
+        outlier_treshold=outlier_treshold,
+        n_harmonics=n_harmonics,
+    )
 
-        d["BIC"] = delta_bic
-        d["pvalue"] = p_val
-        d["r2"] = res.rsquared
+    # --- Dispatch to serial or parallel execution ---
+    if n_jobs == 1:
+        print("Running in serial mode.")
+        results_list = [
+            fit_function(gene_name=genes[i], gene_expression=mat[:, i])
+            for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
+        ]
+    else:
+        print(f"Running in parallel on {n_jobs} jobs.")
+        results_list = Parallel(n_jobs=n_jobs)(
+            delayed(fit_function)(gene_name=genes[i], gene_expression=mat[:, i])
+            for i in tqdm(range(len(genes)), desc="Fitting genes (parallel)")
+        )
 
-        results.append(d)
+    # --- Final cleanup and DataFrame creation ---
+    results_list = [r for r in results_list if r is not None]
+    if not results_list:
+        print("Warning: All gene fits failed.")
+        return pd.DataFrame()
 
-    df = pd.DataFrame(results).set_index("gene")
-    df = Beta(df)
-    df.get_amp(inplace=True)
+    df = pd.DataFrame(results_list).set_index("gene")
 
     # BH correction
     df["pvalue_correctedBH"] = benjamini_hochberg_correction(df["pvalue"].values)
-    return Beta(df)
+
+    # Calculate amplitude and phase
+    df = Beta(df)
+    df.get_amp(inplace=True)
+
+    return df
+
+
+# def lm_gene_fit(
+#     data,
+#     phases,
+#     genes=None,
+#     layer=None,
+#     n_harmonics=1,
+# ):
+#     """
+#     Fits log-transformed gene expression data to a harmonic model using OLS.
+
+#     Parameters:
+#     ----------
+#     data : numpy.ndarray, pandas.DataFrame, or AnnData
+#         Log-transformed expression matrix (samples × genes). If DataFrame,
+#         genes should be columns. If AnnData, genes in var_names.
+#     phases : array-like
+#         Phases in radians for each sample (length = n_samples).
+#     genes : list of str, optional
+#         Subset of genes to fit. If None, use all in data.
+#     layer : str, optional
+#         If AnnData, which .layers[layer] to use; else adata.X.
+#     n_harmonics : int, default=1
+#         Number of harmonics to include (cos1/sin1, cos2/sin2, …).
+
+#     Returns:
+#     -------
+#     params_g : pandas.DataFrame
+#         Indexed by gene, with columns:
+#         - a_0       intercept
+#         - a_1, b_1  cos/sin coefficients (and a_2, b_2, … if n_harmonics>1)
+#         - BIC       ΔBIC = BIC_full − BIC_null
+#         - pvalue    from nested F-test
+#         - amp       amplitude = √(a_1² + b_1²) (or max-minus-min/2 for ≥2)
+#         - phase     phase in [0,2π)
+#         - pvalue_correctedBH
+#     """
+
+#     # --- select gene list ---
+#     if hasattr(data, "var_names"):
+#         all_genes = list(data.var_names)
+#     elif isinstance(data, pd.DataFrame):
+#         all_genes = data.columns.tolist()
+#     else:
+#         raise ValueError("For numpy input you must pass genes=list_of_names")
+
+#     if genes is None:
+#         genes = all_genes
+#     else:
+#         genes = [g for g in genes if g in all_genes]
+#         if not genes:
+#             raise ValueError("None of the specified genes found in data")
+
+#     # --- extract expression matrix ---
+#     if hasattr(data, "layers"):
+#         mat = data[:, genes].layers[layer] if layer else data[:, genes].X
+#     elif isinstance(data, pd.DataFrame):
+#         mat = data[genes].values
+#     else:  # numpy array
+#         mat = data[:, [all_genes.index(g) for g in genes]]
+
+#     # if sparse
+#     try:
+#         mat = mat.toarray()
+#     except AttributeError:
+#         pass
+
+#     # --- build design matrices ---
+#     X = create_harmonic_design_matrix(phases, n_harmonics)
+#     X_null = create_harmonic_design_matrix(phases, 0)  # intercept only
+
+#     results = []
+#     for i, gene in enumerate(genes):
+#         y = mat[:, i]
+#         # full model
+#         mod = sm.OLS(y, X)
+#         res = mod.fit()
+#         # null model
+#         mod0 = sm.OLS(y, X_null)
+#         res0 = mod0.fit()
+#         # nested F-test
+#         f_stat, p_val, _ = res.compare_f_test(res0)
+#         # ΔBIC
+#         delta_bic = res.bic - res0.bic
+#         # collect params
+#         d = {"gene": gene}
+#         param_values = res.params.to_dict()
+#         for k, v in param_values.items():
+#             d[k] = v
+
+#         d["BIC"] = delta_bic
+#         d["pvalue"] = p_val
+#         d["r2"] = res.rsquared
+
+#         results.append(d)
+
+#     df = pd.DataFrame(results).set_index("gene")
+#     df = Beta(df)
+#     df.get_amp(inplace=True)
+
+#     # BH correction
+#     df["pvalue_correctedBH"] = benjamini_hochberg_correction(df["pvalue"].values)
+#     return Beta(df)
 
 
 def create_harmonic_design_matrix(phases, n_harmonics=1, add_intercept=True):
@@ -652,227 +600,3 @@ def compute_mutual_information_reg(adata, phase, genes, layer=None, n_jobs=None)
     df.index.name = "gene"
 
     return df
-
-
-# def glm_gene_fit(
-#     data,
-#     phases,
-#     genes=None,
-#     counts=None,
-#     fixed_disp=0.1,
-#     fit_disp=False,
-#     layer=None,
-#     n_harmonics=1,
-#     outlier_treshold=100.0,
-#     use_mi=None,
-# ):
-#     """
-#     Fits gene expression data to a harmonic model using statsmodels.
-
-#     This function is a standalone version of the fit_genes_fast method from RITMO class,
-#     without dependencies on JAX or the class structure.
-
-#     Parameters:
-#     -----------
-#     data : numpy.ndarray, pandas.DataFrame, or AnnData
-#         Gene expression matrix of shape (cells/samples, genes)
-#         If DataFrame, genes should be in columns
-#         If AnnData, genes should be in var_names
-#     phases : numpy.ndarray
-#         Phases in radians for each cell/sample (shape: n_samples)
-#     genes : list, optional
-#         List of gene names to analyze.
-#         Required if data is numpy array, optional for DataFrame and AnnData
-#     counts : numpy.ndarray, optional
-#         Total counts for each cell (e.g., library size). If None, no normalization is applied
-#         For AnnData, if None and counts are needed, they will be computed from the data
-#     fixed_disp : float, default=0.1
-#         Fixed dispersion parameter when fit_disp=False
-#     fit_disp : bool, default=False
-#         Whether to fit the dispersion parameter, not really well supported yet
-#     layer : str, optional
-#         For AnnData input, specifies which layer to use (e.g., 'counts', 'spliced').
-#         If None, uses adata.X
-#     n_harmonics : int, default=1
-#         Number of harmonics to fit. 1 for cosine and sine, 2 for second harmonic, etc.
-#     outlier_treshold:
-#         Percentile of cells to retain, offers protection from outliers
-
-#     Returns:
-#     --------
-#     params_g : pandas.DataFrame
-#         DataFrame with fitted parameters for each gene:
-#         - a_i: coefficient for cos(phase)
-#         - b_i: coefficient for sin(phase)
-#         - a_0: intercept
-#         - disp: dispersion parameter (if fit_disp=True)
-#         - pvalue: significance of rhythmicity
-#         - BIC: Bayesian Information Criterion for model selection
-#         - amp: amplitude of the fitted curve
-#         - phase: phase of the fitted curve
-#     """
-
-#     # Get gene list
-#     if genes is None:
-#         genes = data.var_names.tolist()
-#     else:
-#         genes = [gene for gene in genes if gene in data.var_names]
-#         if len(genes) == 0:
-#             raise ValueError("None of the specified genes were found in AnnData object")
-
-#     # Get expression data from the specified layer
-#     if layer is None:
-#         data_c = data[:, genes].X
-#     else:
-#         if layer not in data.layers:
-#             raise ValueError(f"Layer '{layer}' not found in AnnData object")
-#         data_c = data[:, genes].layers[layer]
-
-#     # Try to convert to dense array if it's sparse
-#     try:
-#         data_c = data_c.toarray()
-#     except AttributeError:
-#         # Already dense
-#         pass
-
-#     # Compute counts if not provided
-#     if counts is None and (fit_disp or True):  # Always need counts for NB model
-#         if layer is None:
-#             total_counts = data.X.sum(axis=1)
-#         else:
-#             total_counts = data.layers[layer].sum(axis=1)
-
-#         # Convert to dense if needed
-#         try:
-#             counts = total_counts.A1  # For CSR matrix
-#         except AttributeError:
-#             counts = total_counts
-
-#     # Create design matrix
-#     X = create_harmonic_design_matrix(phases.squeeze(), n_harmonics=n_harmonics)
-
-#     # Design matrix for null model (intercept only)
-#     X_null = create_harmonic_design_matrix(phases.squeeze(), 0)
-
-#     # Fit models for each gene
-#     results_list = []
-
-#     # loop with tqdm for progress bar
-#     for gene_index, gene_name in tqdm(
-#         enumerate(genes), total=len(genes), desc="Fitting genes"
-#     ):
-#         # In case I am using bulk data, which has a gene dependent offset
-#         if type(counts) == pd.DataFrame:
-#             counts = counts[gene_name].values
-
-#         # Extract the gene counts
-#         if isinstance(data, pd.DataFrame):
-#             gene_counts = data[gene_name].values
-#         else:
-#             gene_counts = data_c[:, gene_index]
-
-#         threshold = np.percentile(gene_counts, outlier_treshold)
-#         mask = gene_counts <= threshold
-
-#         if mask.sum() == 0:
-#             print(f"Skipping gene {gene_name} due to empty mask")
-#             continue
-
-#         gene_counts = gene_counts[mask]
-#         if gene_counts.sum() == 0:
-#             continue
-
-#         counts_ = counts[mask]
-
-#         # Fit the models using statsmodels
-#         if fit_disp:
-#             model = NegativeBinomial(gene_counts, X[mask], offset=np.log(counts_))
-#             model_null = NegativeBinomial(
-#                 gene_counts, X_null[mask], offset=np.log(counts_)
-#             )
-#         else:
-#             model = sm.GLM(
-#                 gene_counts,
-#                 X[mask],
-#                 family=sm.families.NegativeBinomial(alpha=fixed_disp),
-#                 offset=np.log(counts_),
-#             )
-#             model_null = sm.GLM(
-#                 gene_counts,
-#                 X_null[mask],
-#                 family=sm.families.NegativeBinomial(alpha=fixed_disp),
-#                 offset=np.log(counts_),
-#             )
-
-#         # Fit models
-#         try:
-#             result = model.fit(disp=False)
-#             result_null = model_null.fit(disp=False)
-
-#             # Calculate p-value for rhythmicity using likelihood ratio test
-#             llr = 2 * (result.llf - result_null.llf)
-#             pval = 1 - chi2.cdf(llr, 2)
-
-#             # Calculate BIC for model selection
-#             bic = -2 * result.llf + np.log(len(gene_counts)) * (len(result.params) + 1)
-#             bic_null = -2 * result_null.llf + np.log(len(gene_counts)) * (
-#                 len(result_null.params) + 1
-#             )
-#             delta_bic = bic - bic_null
-
-#             # Store the results dynamically based on number of harmonics
-#             result_dict = {"gene": gene_name}
-
-#             # Extract all parameters except dispersion (if fitted) and name them
-#             param_values = result.params[:-1] if fit_disp else result.params
-#             param_values = param_values.to_dict()
-#             for k, v in param_values.items():
-#                 result_dict[k] = v
-
-#             if fit_disp:
-#                 # fix this line!
-#                 result_dict["disp"] = result.params.iloc[3]
-#             else:
-#                 result_dict["disp"] = fixed_disp
-
-#             result_dict["BIC"] = delta_bic
-#             result_dict["pvalue"] = pval
-#             result_dict["r2"] = 1 - (result.llf / result_null.llf)
-
-#             # result_dict["outlier_driven"] = simple_outlier_detector(gene_counts)
-#             results_list.append(result_dict)
-
-#         except Exception as e:
-#             print(f"Warning: Could not fit model for gene {gene_name}: {str(e)}")
-#             # Add a placeholder with NaN values for each harmonic parameter
-#             result_dict = {"gene": gene_name}
-#             for h in range(1, n_harmonics + 1):
-#                 result_dict[f"a_{h}"] = np.nan
-#                 result_dict[f"b_{h}"] = np.nan
-#             result_dict["a_0"] = np.nan
-#             result_dict["disp"] = np.nan if fit_disp else fixed_disp
-#             result_dict["pvalue"] = np.nan
-#             result_dict["BIC"] = np.nan
-#             result_dict["r2"] = np.nan
-
-#             results_list.append(result_dict)
-#             continue
-
-#     # Convert results to DataFrame
-#     params_g = pd.DataFrame(results_list)
-#     params_g = params_g.set_index("gene")
-
-#     # adjust p-values for multiple testing
-#     params_g["pvalue_correctedBH"] = benjamini_hochberg_correction(
-#         params_g["pvalue"].values
-#     )
-
-#     params_g = Beta(params_g)
-#     params_g.get_amp(inplace=True)
-
-#     if use_mi:
-#         print("computing Mutual Information...")
-#         mi = compute_mutual_information(data, phases, genes)
-#         params_g["mi"] = mi
-
-#     return params_g
