@@ -9,6 +9,7 @@ from statsmodels.tools import add_constant
 from .beta import Beta
 from .pseudobulk import pseudobulk
 from .basics import w, rh
+
 from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
 from sklearn.preprocessing import StandardScaler
 from scipy.sparse import issparse
@@ -121,14 +122,17 @@ def glm_gene_fit(
     outlier_treshold=98.0,
     use_mi=None,
     n_jobs=-1,
-    pseudobulk_by=False,
+    pseudobulk_by=None,
 ):
     """
     Fits gene expression data to a harmonic model using statsmodels.
     Runs in parallel if n_jobs != 1.
     ... (rest of docstring) ...
     """
-    # --- All the initial data setup remains the same ---
+    if pseudobulk_by is not None:
+        data = pseudobulk(data, pseudobulk_by, layer)
+        phases = data.obs.ZTmod.values * (2 * np.pi / 24)
+
     if genes is None:
         genes = data.var_names.tolist()
     else:
@@ -175,7 +179,7 @@ def glm_gene_fit(
         _fit_single_gene_glm,
         X=X,
         X_null=X_null,
-        counts_=counts,
+        # counts_=counts,
         fixed_disp=fixed_disp,
         fit_disp=fit_disp,
         outlier_treshold=outlier_treshold,
@@ -185,18 +189,41 @@ def glm_gene_fit(
     # --- Dispatch to serial or parallel execution ---
     if n_jobs == 1:
         print("Running in serial mode.")
-        # Use a simple list comprehension for the serial version
-        results_list = [
-            fit_function(gene_name=genes[i], gene_counts=data_c[:, i])
-            for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
-        ]
+        # Determine the counts array slice before the loop
+        if counts.ndim == 1:
+            # Loop over a single dimension counts array
+            results_list = [
+                fit_function(
+                    gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts
+                )
+                for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
+            ]
+        else:
+            # Loop over a multi-dimensional counts array
+            results_list = [
+                fit_function(
+                    gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts[:, i]
+                )
+                for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
+            ]
+
     else:
         print(f"Running in parallel on {n_jobs} jobs.")
-        # The parallel call is now also slimmer
-        results_list = Parallel(n_jobs=n_jobs)(
-            delayed(fit_function)(gene_name=genes[i], gene_counts=data_c[:, i])
-            for i in tqdm(range(len(genes)), desc="Fitting genes (parallel)")
-        )
+        # The counts.ndim check is now performed before the parallel call
+        if counts.ndim == 1:
+            results_list = Parallel(n_jobs=n_jobs)(
+                delayed(fit_function)(
+                    gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts
+                )
+                for i in tqdm(range(len(genes)), desc="Fitting genes (parallel)")
+            )
+        else:
+            results_list = Parallel(n_jobs=n_jobs)(
+                delayed(fit_function)(
+                    gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts[:, i]
+                )
+                for i in tqdm(range(len(genes)), desc="Fitting genes (parallel)")
+            )
 
     # --- The final cleanup and DataFrame creation remains the same ---
     results_list = [r for r in results_list if r is not None]
@@ -216,7 +243,7 @@ def glm_gene_fit(
         print("computing Mutual Information...")
         # Note: You might need to adjust the gene list for MI if some fits failed
         valid_genes = params_g.index.tolist()
-        mi = compute_mutual_information(data, phases, valid_genes)
+        mi = compute_mutual_information_classif(data, phases, valid_genes)
         params_g["mi"] = mi
 
     return params_g
