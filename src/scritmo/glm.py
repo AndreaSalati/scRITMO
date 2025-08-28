@@ -8,6 +8,8 @@ from tqdm import tqdm
 from statsmodels.tools import add_constant
 from .beta import Beta
 from .pseudobulk import pseudobulk
+from .basics import w, rh
+
 from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
 from sklearn.preprocessing import StandardScaler
 from scipy.sparse import issparse
@@ -115,7 +117,7 @@ def glm_gene_fit(
     counts=None,
     fixed_disp=0.1,
     fit_disp=False,
-    layer=None,
+    layer="spliced",
     n_harmonics=1,
     outlier_treshold=98.0,
     use_mi=None,
@@ -142,6 +144,17 @@ def glm_gene_fit(
         data_c = data[:, genes].X
     else:
         data_c = data[:, genes].layers[layer]
+
+    if pseudobulk_by:
+        pb = pseudobulk(
+            data,
+            groupby_obs_list=pseudobulk_by,
+            pseudobulk_layer=layer,
+        )
+        data = pb
+        data.layers[layer] = data.layers["sum"]
+        data_c = data[:, genes].layers[layer]
+        phases = pb.obs["ZTmod"].values * w
 
     try:
         data_c = data_c.toarray()

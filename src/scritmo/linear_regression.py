@@ -5,6 +5,8 @@ import pandas as pd
 from statsmodels.tools.tools import add_constant
 import statsmodels.api as sm
 from tqdm import tqdm
+import statsmodels.api as sm
+from patsy import dmatrix, build_design_matrices
 
 
 def create_harmonic_design_matrix(phases, n_harmonics=1, add_intercept=True):
@@ -46,187 +48,74 @@ def create_harmonic_design_matrix(phases, n_harmonics=1, add_intercept=True):
     X_df = pd.DataFrame(X, columns=column_names)
 
     if add_intercept:
-        X_df = add_constant(X_df, prepend=False)
+        X_df = add_constant(X_df, prepend=True)
 
     return X_df
 
 
-def harmonic_regression_adata(
-    adata,
-    genes,
-    phases,
-    layer=None,
-    n_harmonics=1,
-):
+def evaluate_harmonic_fn(x, beta, n_harmonics=1):
     """
-    Performs harmonic regression using OLS on genes in an AnnData object and computes
-    statistics comparing against a flat model.
+    Evaluates the harmonic function at given x-values using the coefficients beta.
 
     Parameters:
     -----------
-    adata : AnnData
-        AnnData object containing log-transformed gene expression data
-    genes : list
-        List of gene names to analyze
-    phases : array-like
-        Vector of phases in radians (0 to 2π) for each cell/sample
-    layer : str, optional
-        Layer in AnnData to use. If None, uses .X
+    x : array-like
+        Input values where the harmonic function will be evaluated.
+    beta : array-like
+        Coefficients of the harmonic regression model.
     n_harmonics : int, default=1
-        Number of harmonics to include in the model
-    return_full_results : bool, default=False
-        Whether to return full regression results for each gene
+        Number of harmonics included in the model.
 
     Returns:
     --------
-    results_df : pandas.DataFrame
-        DataFrame containing regression results with the following columns:
-        - gene: Gene name
-        - a_g, b_g, m_g: Coefficients for cos, sin, and intercept
-        - pvalue: P-value from likelihood ratio test vs. flat model
-        - padj: Adjusted p-value (Benjamini-Hochberg)
-        - BIC: BIC difference between harmonic and flat models
-        - amplitude: Amplitude of the first harmonic
-        - phase: Phase of the first harmonic
-        - rsquared: R-squared value for the model
-
-    full_results : dict, optional
-        Dictionary with gene names as keys and full regression result objects as values
-        (only returned if return_full_results=True)
+    y : numpy.ndarray
+        Evaluated values of the harmonic function at x.
     """
-    # Create design matrices
-    X_harmonic = create_harmonic_design_matrix(phases, n_harmonics)
-    X_flat = create_harmonic_design_matrix(phases, 0)  # Just the intercept
-
-    # Filter genes to ensure they exist in the dataset
-    genes = [g for g in genes if g in adata.var_names]
-
-    results_list = []
-
-    # tqdm is used to show progress
-    for gene in tqdm(genes, desc="Fitting genes", unit="gene"):
-        # Extract gene expression
-        if layer is None:
-            y = (
-                adata[:, gene].X.toarray().flatten()
-                if hasattr(adata[:, gene].X, "toarray")
-                else adata[:, gene].X
-            )
-        else:
-            y = (
-                adata[:, gene].layers[layer].toarray().flatten()
-                if hasattr(adata[:, gene].layers[layer], "toarray")
-                else adata[:, gene].layers[layer]
-            )
-
-        # Fit harmonic model using OLS
-        harmonic_model = sm.OLS(y, X_harmonic)
-        flat_model = sm.OLS(y, X_flat)
-
-        try:
-            harmonic_fit = harmonic_model.fit()
-            flat_fit = flat_model.fit()
-
-            # Likelihood ratio test for p-value
-            # For OLS, we can use F-test or directly compare RSS
-            n = len(y)
-            df_harmonic = X_harmonic.shape[1]
-            df_flat = X_flat.shape[1]
-            df_diff = df_harmonic - df_flat
-
-            rss_harmonic = harmonic_fit.ssr
-            rss_flat = flat_fit.ssr
-
-            f_stat = ((rss_flat - rss_harmonic) / df_diff) / (
-                rss_harmonic / (n - df_harmonic)
-            )
-            pvalue = 1 - stats.f.cdf(f_stat, df_diff, n - df_harmonic)
-
-            # Calculate BIC difference
-            bic_diff = (
-                harmonic_fit.bic - flat_fit.bic
-            )  # Positive value means harmonic model is better
-
-            # Extract parameters for first harmonic
-            params = harmonic_fit.params
-
-            # For the standard form (first harmonic only): y ~ a_g * cos(phi) + b_g * sin(phi) + m_g
-            if n_harmonics >= 1:
-                a_g = params[X_harmonic.columns.get_loc("cos1")]
-                b_g = params[X_harmonic.columns.get_loc("sin1")]
-
-                amplitude = np.sqrt(a_g**2 + b_g**2)
-                phase = np.arctan2(b_g, a_g) % (2 * np.pi)
-            else:
-                a_g = 0
-                b_g = 0
-                amplitude = 0
-                phase = 0
-
-            # Get intercept
-            if "const" in X_harmonic.columns:
-                m_g = params[X_harmonic.columns.get_loc("const")]
-            else:
-                m_g = y.mean()
-
-            # Compile results
-            result = {
-                "gene": gene,
-                "a_g": a_g,
-                "b_g": b_g,
-                "m_g": m_g,
-                "pvalue": pvalue,
-                "BIC": bic_diff,
-                "amp": amplitude,
-                "phase": phase,
-                "R2": harmonic_fit.rsquared,
-            }
-
-            results_list.append(result)
-
-        except Exception as e:
-            print(f"Error fitting model for gene {gene}: {str(e)}")
-
-    # Create results DataFrame
-    results_df = pd.DataFrame(results_list)
-    # columns gene as index
-    results_df.set_index("gene", inplace=True)
-
-    # Adjust p-values for multiple testing (Benjamini-Hochberg)
-    if len(results_list) > 0:
-        results_df["pvalue_correctedBH"] = benjamini_hochberg_correction(
-            results_df["pvalue"].values
-        )
-
-    return results_df
+    X = create_harmonic_design_matrix(x, n_harmonics=n_harmonics, add_intercept=True)
+    y = X.values @ beta  # Matrix multiplication to get the predicted values
+    return y
 
 
-def harmonic_regression(t, y, omega=1):
+def fit_periodic_spline(x, y, df, period=2 * np.pi):
     """
-    t: time
-    y: expression of a gene
-    This function clearly uses guassian noise onlys
-    """
-    X = np.zeros((len(t), 3))
-    X[:, 0] = np.cos(omega * t)
-    X[:, 1] = np.sin(omega * t)
-    X[:, -1] = 1
-    # fit linear regression
-    beta = np.linalg.lstsq(X, y, rcond=None)[0]
-    return beta
+    Fits a periodic spline to x and y data and returns a prediction function.
 
+    This function will prompt the user to enter the number of degrees of
+    freedom for the spline.
 
-def polar_parameters(beta, rel_ampl=False):
+    Args:
+        x (np.array): The independent variable data.
+        y (np.array): The dependent variable data.
+
+    Returns:
+        function: A callable function that takes a new array of x-values
+                  and returns the corresponding predicted y-values.
     """
-    takes the parameters of the linear regression and returns the
-    amplitude and phase, and the radial amplitude if rel_ampl is True
-    """
-    amp = np.sqrt(beta[0] ** 2 + beta[1] ** 2)
-    # here the arguments of arctan2 should be y,x and they are as the previous functions switches already
-    phase = np.arctan2(beta[1], beta[0])
-    if rel_ampl:
-        amp = amp / beta[-1]
-    return amp, phase, beta[-1]
+
+    # 2. Create the design matrix for the training data
+    # The 'cc()' function creates a cyclic cubic (periodic) spline basis.
+    # formula = f"cc(x, df={df})"
+    formula = f"cc(x, df={df}, lower_bound=0, upper_bound={period})"
+    design_matrix_train = dmatrix(formula, {"x": x}, return_type="dataframe")
+
+    # Capture the design information to use for prediction later
+    design_info = design_matrix_train.design_info
+
+    # 3. Fit the Generalized Linear Model
+    model = sm.GLM(y, design_matrix_train).fit()
+
+    # 4. Define and return the prediction function (a closure)
+    def predict_function(new_x):
+        """
+        Predicts y-values for new x-values using the fitted spline model.
+        """
+        # Build a new design matrix for the new_x data using the original's info
+        new_design_matrix = build_design_matrices([design_info], {"x": new_x})[0]
+
+        # Return the model's prediction for this new matrix
+        return model.predict(new_design_matrix)
+
+    return predict_function
 
 
 def genes_polar_parameters(res, rel_ampl=False):
@@ -340,7 +229,7 @@ def harmonic_function(t, beta, omega=1, basis="cartesian", rel_ampl=False):
     rel_ampl: if the amplitude is relative to the mean
     """
     if basis == "cartesian":
-        return beta[0] * np.cos(omega * t) + beta[1] * np.sin(omega * t) + beta[-1]
+        return beta[1] * np.cos(omega * t) + beta[2] * np.sin(omega * t) + beta[0]
     elif basis == "polar":
         if rel_ampl:
             out = beta[0] * beta[-1] * np.cos(omega * t - beta[1]) + beta[-1]
@@ -349,130 +238,74 @@ def harmonic_function(t, beta, omega=1, basis="cartesian", rel_ampl=False):
         return out
 
 
-def harmonic_function2(t, beta, omega=1):
-    """
-    takes the parameters of the linear regression and returns the
-    the function evaluated at times t:
-    beta: parameters of the linear regression, 2 harmonics, 5 parameters
-    """
+# def harmonic_regression_bic(t, y, omega=1):
+#     """
+#     this function peforms linear harmonic regression but also
+#     compares the fit to a flat model and returns which model is better
+#     minimizing the BIC. It can be used to test if a gene is rhythmic
 
-    return (
-        beta[0] * np.cos(omega * t)
-        + beta[1] * np.sin(omega * t)
-        + beta[2] * np.cos(2 * omega * t)
-        + beta[3] * np.sin(2 * omega * t)
-        + beta[-1]
-    )
+#     t: time
+#     y: expression of a gene
+#     omega: frequency
 
+#     returns:
+#     beta: parameters of the harmonic regression
+#     delta_bic: bic of the harmonic regression minus bic of the flat
+#         it quantifies the evidence in favor of the harmonic regression
+#     """
+#     flats = y.mean() * np.ones_like(y)
+#     beta = harmonic_regression(t, y, omega=omega)
+#     # calculate bic of the harmonic regression
+#     bic_h = BIC(y, harmonic_function(t, beta, omega), 3)
+#     bic_f = BIC(y, flats, 1)
 
-def harmonic_regression_bic(t, y, omega=1):
-    """
-    this function peforms linear harmonic regression but also
-    compares the fit to a flat model and returns which model is better
-    minimizing the BIC. It can be used to test if a gene is rhythmic
+#     delta_bic = bic_h - bic_f
+#     is_h = bic_h < bic_f
 
-    t: time
-    y: expression of a gene
-    omega: frequency
-
-    returns:
-    beta: parameters of the harmonic regression
-    delta_bic: bic of the harmonic regression minus bic of the flat
-        it quantifies the evidence in favor of the harmonic regression
-    """
-    flats = y.mean() * np.ones_like(y)
-    beta = harmonic_regression(t, y, omega=omega)
-    # calculate bic of the harmonic regression
-    bic_h = BIC(y, harmonic_function(t, beta, omega), 3)
-    bic_f = BIC(y, flats, 1)
-
-    delta_bic = bic_h - bic_f
-    is_h = bic_h < bic_f
-
-    if is_h:
-        return beta, delta_bic
-    else:
-        return np.array([0.0, 0.0, y.mean()]), delta_bic
+#     if is_h:
+#         return beta, delta_bic
+#     else:
+#         return np.array([0.0, 0.0, y.mean()]), delta_bic
 
 
-def harmonic_regression_pvalue(t, y, omega=1):
-    """
-    Performs harmonic regression, compares it against a model with no harmonic terms (intercept only),
-    using a chi-square test for the comparison, and returns the coefficients and chi-square p-value.
+# def harmonic_regression_pvalue(t, y, omega=1):
+#     """
+#     Performs harmonic regression, compares it against a model with no harmonic terms (intercept only),
+#     using a chi-square test for the comparison, and returns the coefficients and chi-square p-value.
 
 
-    Parameters:
-    - t: numpy array of time points
-    - y: numpy array of gene expression levels at the corresponding time points
-    - omega: frequency of the harmonic component
+#     Parameters:
+#     - t: numpy array of time points
+#     - y: numpy array of gene expression levels at the corresponding time points
+#     - omega: frequency of the harmonic component
 
-    Returns:
-    - beta: Coefficients of the harmonic regression
-    - chi_square_p_value: P-value from the chi-square test of the model comparison
-    """
-    # Harmonic model
-    X_harmonic = np.zeros((len(t), 3))
-    X_harmonic[:, 0] = np.cos(omega * t)
-    X_harmonic[:, 1] = np.sin(omega * t)
-    X_harmonic[:, -1] = 1  # Intercept
-    beta, residuals, rank, s = np.linalg.lstsq(X_harmonic, y, rcond=None)
+#     Returns:
+#     - beta: Coefficients of the harmonic regression
+#     - chi_square_p_value: P-value from the chi-square test of the model comparison
+#     """
+#     # Harmonic model
+#     X_harmonic = np.zeros((len(t), 3))
+#     X_harmonic[:, 0] = np.cos(omega * t)
+#     X_harmonic[:, 1] = np.sin(omega * t)
+#     X_harmonic[:, -1] = 1  # Intercept
+#     beta, residuals, rank, s = np.linalg.lstsq(X_harmonic, y, rcond=None)
 
-    # Intercept-only model
-    X_intercept = np.ones((len(t), 1))  # Intercept
-    _, residuals_intercept, _, _ = np.linalg.lstsq(X_intercept, y, rcond=None)
+#     # Intercept-only model
+#     X_intercept = np.ones((len(t), 1))  # Intercept
+#     _, residuals_intercept, _, _ = np.linalg.lstsq(X_intercept, y, rcond=None)
 
-    # Calculate the chi-square statistic
-    # Here, we assume the residual sum of squares effectively approximates twice the difference in log-likelihoods
-    chi_square_stat = (residuals_intercept - residuals) / np.var(y) * len(y)
+#     # Calculate the chi-square statistic
+#     # Here, we assume the residual sum of squares effectively approximates twice the difference in log-likelihoods
+#     chi_square_stat = (residuals_intercept - residuals) / np.var(y) * len(y)
 
-    # Degrees of freedom: number of parameters in harmonic model - number of parameters in intercept-only model
-    df = 2  # cos and sin terms are the extra parameters
+#     # Degrees of freedom: number of parameters in harmonic model - number of parameters in intercept-only model
+#     df = 2  # cos and sin terms are the extra parameters
 
-    # Compute the chi-square p-value
-    chi_square_p_value = stats.chi2.sf(chi_square_stat, df)
-    # adjusted_p_value = benjamini_hochberg_correction([chi_square_p_value])[0]
+#     # Compute the chi-square p-value
+#     chi_square_p_value = stats.chi2.sf(chi_square_stat, df)
+#     # adjusted_p_value = benjamini_hochberg_correction([chi_square_p_value])[0]
 
-    return beta, chi_square_p_value
-
-
-def harmonic_regression_loop(E_ygt, t_u, omega=1, eval_fit="bic", return_eval=True):
-    """
-    It takes the output of pseudobulk_loop and returns the parameters of the harmonic regression
-    for each gene and celltype. It use harmonic_regression_bic to fit the data
-    Input:
-    - E_ygt: 3D array with dimensions celltype, gene, timepoint
-    - t_u: timepoints
-    - omega: frequency
-    - eval_fit: 'bic' or 'pvalue'
-    - return_eval: if True, the function returns the BIC/Pvalue of the harmonic regression
-
-    Output:
-    - res: np.array of shape (N_ct, N_g, 3) with the parameters of the harmonic regression
-        where the last dimension is a, b, mu
-    - vals: np.array of shape (N_ct, N_g) with the BIC/Pvalue of the harmonic
-    """
-    N_y, N_g, N_t = E_ygt.shape
-    res = np.zeros((N_y, N_g, 3))
-    vals = np.zeros((N_y, N_g))
-
-    for i in range(N_y):
-        for j in range(N_g):
-            y = E_ygt[i, j, :].squeeze()
-
-            if eval_fit == "pvalue":
-                beta, v = harmonic_regression_pvalue(t_u, y, omega=omega)
-            elif eval_fit == "bic":
-                beta, v = harmonic_regression_bic(t_u, y, omega=omega)
-            # if beta is not None:
-            # amp, phase, mu = radial_parameters(beta)
-            res[i, j, 0] = beta[0]
-            res[i, j, 1] = beta[1]
-            res[i, j, 2] = beta[2]
-            vals[i, j] = v
-    if return_eval:
-        return res, vals
-    else:
-        return res
+#     return beta, chi_square_p_value
 
 
 def benjamini_hochberg_correction(p_values):
@@ -552,3 +385,192 @@ def cSVD(res, center_around="mean", return_explained=False):
         return U_, V_, S_norm
     else:
         return U_, V_
+
+
+# def harmonic_regression_adata(
+#     adata,
+#     genes,
+#     phases,
+#     layer=None,
+#     n_harmonics=1,
+# ):
+#     """
+#     Performs harmonic regression using OLS on genes in an AnnData object and computes
+#     statistics comparing against a flat model.
+
+#     Parameters:
+#     -----------
+#     adata : AnnData
+#         AnnData object containing log-transformed gene expression data
+#     genes : list
+#         List of gene names to analyze
+#     phases : array-like
+#         Vector of phases in radians (0 to 2π) for each cell/sample
+#     layer : str, optional
+#         Layer in AnnData to use. If None, uses .X
+#     n_harmonics : int, default=1
+#         Number of harmonics to include in the model
+#     return_full_results : bool, default=False
+#         Whether to return full regression results for each gene
+
+#     Returns:
+#     --------
+#     results_df : pandas.DataFrame
+#         DataFrame containing regression results with the following columns:
+#         - gene: Gene name
+#         - a_g, b_g, m_g: Coefficients for cos, sin, and intercept
+#         - pvalue: P-value from likelihood ratio test vs. flat model
+#         - padj: Adjusted p-value (Benjamini-Hochberg)
+#         - BIC: BIC difference between harmonic and flat models
+#         - amplitude: Amplitude of the first harmonic
+#         - phase: Phase of the first harmonic
+#         - rsquared: R-squared value for the model
+
+#     full_results : dict, optional
+#         Dictionary with gene names as keys and full regression result objects as values
+#         (only returned if return_full_results=True)
+#     """
+#     # Create design matrices
+#     X_harmonic = create_harmonic_design_matrix(phases, n_harmonics)
+#     X_flat = create_harmonic_design_matrix(phases, 0)  # Just the intercept
+
+#     # Filter genes to ensure they exist in the dataset
+#     genes = [g for g in genes if g in adata.var_names]
+
+#     results_list = []
+
+#     # tqdm is used to show progress
+#     for gene in tqdm(genes, desc="Fitting genes", unit="gene"):
+#         # Extract gene expression
+#         if layer is None:
+#             y = (
+#                 adata[:, gene].X.toarray().flatten()
+#                 if hasattr(adata[:, gene].X, "toarray")
+#                 else adata[:, gene].X
+#             )
+#         else:
+#             y = (
+#                 adata[:, gene].layers[layer].toarray().flatten()
+#                 if hasattr(adata[:, gene].layers[layer], "toarray")
+#                 else adata[:, gene].layers[layer]
+#             )
+
+#         # Fit harmonic model using OLS
+#         harmonic_model = sm.OLS(y, X_harmonic)
+#         flat_model = sm.OLS(y, X_flat)
+
+#         try:
+#             harmonic_fit = harmonic_model.fit()
+#             flat_fit = flat_model.fit()
+
+#             # Likelihood ratio test for p-value
+#             # For OLS, we can use F-test or directly compare RSS
+#             n = len(y)
+#             df_harmonic = X_harmonic.shape[1]
+#             df_flat = X_flat.shape[1]
+#             df_diff = df_harmonic - df_flat
+
+#             rss_harmonic = harmonic_fit.ssr
+#             rss_flat = flat_fit.ssr
+
+#             f_stat = ((rss_flat - rss_harmonic) / df_diff) / (
+#                 rss_harmonic / (n - df_harmonic)
+#             )
+#             pvalue = 1 - stats.f.cdf(f_stat, df_diff, n - df_harmonic)
+
+#             # Calculate BIC difference
+#             bic_diff = (
+#                 harmonic_fit.bic - flat_fit.bic
+#             )  # Positive value means harmonic model is better
+
+#             # Extract parameters for first harmonic
+#             params = harmonic_fit.params
+
+#             # For the standard form (first harmonic only): y ~ a_g * cos(phi) + b_g * sin(phi) + m_g
+#             if n_harmonics >= 1:
+#                 a_g = params[X_harmonic.columns.get_loc("cos1")]
+#                 b_g = params[X_harmonic.columns.get_loc("sin1")]
+
+#                 amplitude = np.sqrt(a_g**2 + b_g**2)
+#                 phase = np.arctan2(b_g, a_g) % (2 * np.pi)
+#             else:
+#                 a_g = 0
+#                 b_g = 0
+#                 amplitude = 0
+#                 phase = 0
+
+#             # Get intercept
+#             if "const" in X_harmonic.columns:
+#                 m_g = params[X_harmonic.columns.get_loc("const")]
+#             else:
+#                 m_g = y.mean()
+
+#             # Compile results
+#             result = {
+#                 "gene": gene,
+#                 "a_g": a_g,
+#                 "b_g": b_g,
+#                 "m_g": m_g,
+#                 "pvalue": pvalue,
+#                 "BIC": bic_diff,
+#                 "amp": amplitude,
+#                 "phase": phase,
+#                 "R2": harmonic_fit.rsquared,
+#             }
+
+#             results_list.append(result)
+
+#         except Exception as e:
+#             print(f"Error fitting model for gene {gene}: {str(e)}")
+
+#     # Create results DataFrame
+#     results_df = pd.DataFrame(results_list)
+#     # columns gene as index
+#     results_df.set_index("gene", inplace=True)
+
+#     # Adjust p-values for multiple testing (Benjamini-Hochberg)
+#     if len(results_list) > 0:
+#         results_df["pvalue_correctedBH"] = benjamini_hochberg_correction(
+#             results_df["pvalue"].values
+#         )
+
+#     return results_df
+
+# def harmonic_regression_loop(E_ygt, t_u, omega=1, eval_fit="bic", return_eval=True):
+#     """
+#     It takes the output of pseudobulk_loop and returns the parameters of the harmonic regression
+#     for each gene and celltype. It use harmonic_regression_bic to fit the data
+#     Input:
+#     - E_ygt: 3D array with dimensions celltype, gene, timepoint
+#     - t_u: timepoints
+#     - omega: frequency
+#     - eval_fit: 'bic' or 'pvalue'
+#     - return_eval: if True, the function returns the BIC/Pvalue of the harmonic regression
+
+#     Output:
+#     - res: np.array of shape (N_ct, N_g, 3) with the parameters of the harmonic regression
+#         where the last dimension is a, b, mu
+#     - vals: np.array of shape (N_ct, N_g) with the BIC/Pvalue of the harmonic
+#     """
+#     N_y, N_g, N_t = E_ygt.shape
+#     res = np.zeros((N_y, N_g, 3))
+#     vals = np.zeros((N_y, N_g))
+
+#     for i in range(N_y):
+#         for j in range(N_g):
+#             y = E_ygt[i, j, :].squeeze()
+
+#             if eval_fit == "pvalue":
+#                 beta, v = harmonic_regression_pvalue(t_u, y, omega=omega)
+#             elif eval_fit == "bic":
+#                 beta, v = harmonic_regression_bic(t_u, y, omega=omega)
+#             # if beta is not None:
+#             # amp, phase, mu = radial_parameters(beta)
+#             res[i, j, 0] = beta[0]
+#             res[i, j, 1] = beta[1]
+#             res[i, j, 2] = beta[2]
+#             vals[i, j] = v
+#     if return_eval:
+#         return res, vals
+#     else:
+#         return res
