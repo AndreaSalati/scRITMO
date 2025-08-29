@@ -1247,3 +1247,44 @@ def desynchrony_time_plot(
     fig.tight_layout()
 
     return fig, ax
+
+
+def plot_dual_loss(loss_epochs, mad_epochs, title="Training Metrics Over Epochs"):
+    """
+    Creates a plot with two y-axes for loss and MAD.
+
+    Args:
+        loss_epochs (list or np.ndarray): List of loss values per epoch.
+        mad_epochs (list or np.ndarray): List of MAD values per epoch.
+        title (str): Title for the plot.
+    """
+    # Create the figure and the first axes (for loss)
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+
+    # Plot the loss on the left y-axis
+    color_loss = "tab:red"
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("Loss", color=color_loss)
+    ax1.plot(loss_epochs, color=color_loss, label="Loss")
+    ax1.tick_params(axis="y", labelcolor=color_loss)
+
+    # Create a secondary y-axis for MAD
+    ax2 = ax1.twinx()  # instantiates a second axes that shares the same x-axis
+
+    # Plot the MAD on the right y-axis
+    color_mad = "tab:blue"
+    ax2.set_ylabel("MAD", color=color_mad)  # we already handled the x-label with ax1
+    ax2.plot(mad_epochs, color=color_mad, label="MAD")
+    ax2.tick_params(axis="y", labelcolor=color_mad)
+
+    # Add a title and legend to the plot
+    fig.suptitle(title)
+    fig.tight_layout()  # to prevent labels from overlapping
+
+    # Manually create a legend that includes both lines
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax2.legend(lines + lines2, labels + labels2, loc="best")
+
+    # Save the plot to a file
+    plt.show()
