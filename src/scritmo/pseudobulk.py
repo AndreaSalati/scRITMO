@@ -75,80 +75,51 @@ def pseudo_bulk_time(
 
 
 def pseudobulk(
-    adata,
+    adata: sc.AnnData,
     groupby_obs_list: Sequence[str],
     pseudobulk_layer: str = "spliced",
-    n_groups: int = 1,
     keep_obs: Sequence[str] = ("ZT", "ZTmod"),
-    add_layers: bool = False,
 ) -> sc.AnnData:
     """
-    Fast pseudobulk via sc.get.aggregate, then annotate with extra obs columns.
-
-    Parameters
-    ----------
-    adata
-        Input AnnData.
-    groupby_obs_list
-        Two obs columns to group by, e.g. ["celltype", "sample_name"].
-    pseudobulk_layer
-        Which layer to sum.
-    n_groups
-        Number of sub-splits per group (currently only 1 is supported).
-    keep_obs
-        Other obs-columns (must be constant within each `sample_name`)
-        to carry over into the pseudobulk.
-    add_layers
-        If True, add a `"norm"` layer (counts divided by row-sum).
-
-    Returns
-    -------
-    A new AnnData with
-      - X: summed counts (dense `ndarray`),
-      - obs: the grouping columns + your `keep_obs` + a `"counts"` column,
-      - optionally a `"norm"` layer.
+    Creates a pseudobulk AnnData object by summing counts and aggregating metadata.
     """
-    if n_groups != 1:
-        adata.obs["split_id"] = np.random.randint(n_groups, size=adata.n_obs)
-        groupby_obs_list = groupby_obs_list + ["split_id"]
-
-    if type(groupby_obs_list) is not list:
+    if isinstance(groupby_obs_list, str):
         groupby_obs_list = [groupby_obs_list]
 
-    # 1) fast aggregate
+    # 1. Create the pseudobulk counts object
     pb = sc.get.aggregate(
         adata,
-        groupby_obs_list,
+        by=groupby_obs_list,
         func="sum",
         layer=pseudobulk_layer,
     )
 
-    pb.X = pb.layers["sum"]
-
-    # 2) densify X
+    if "sum" in pb.layers:
+        pb.X = pb.layers["sum"].copy()
     if hasattr(pb.X, "toarray"):
         pb.X = pb.X.toarray()
 
-    # 3) counts per pseudobulk
-    pb.obs["counts"] = pb.X.sum(axis=1)
+    # 2. Aggregate metadata
+    if keep_obs:
+        obs_subset = adata.obs[groupby_obs_list + list(keep_obs)]
 
-    # 4) optional normalized layer
-    if add_layers:
-        pb.layers["norm"] = pb.X.copy()
-        pb.layers["norm"] /= pb.obs["counts"].values[:, None]
+        # Group by, using observed=True to match scanpy's grouping
+        aggregated_metadata = obs_subset.groupby(
+            groupby_obs_list, observed=True
+        ).first()
 
-    # 5) pull through any extra obs via your pseudo_bulk helper
-    #    assume groupby_obs_list[0] is the "sample" axis
-    sample_col = groupby_obs_list[0]
-    for col in keep_obs:
-        # build a Series mapping sample → col value
-        mapping: pd.Series = pseudo_bulk_time(
-            labels=adata.obs[sample_col],
-            values=adata.obs[col],
-            return_dict=False,  # get a Series
-        )
-        # align to pb.obs[sample_col]
-        pb.obs[col] = mapping.loc[pb.obs[sample_col]].values
+        # --- NEW FIX: Convert MultiIndex to simple string index ---
+        # This makes aggregated_metadata's index match pb.obs.index
+        tuples = aggregated_metadata.index.to_list()
+        new_index = ["_".join(map(str, t)) for t in tuples]
+        aggregated_metadata.index = new_index
+        # -----------------------------------------------------------
+
+        # 3. Join the aligned metadata
+        pb.obs = pb.obs.join(aggregated_metadata)
+
+    # 4. Add total counts
+    pb.obs["n_counts"] = pb.X.sum(axis=1)
 
     return pb
 

@@ -346,11 +346,11 @@ class Beta(pd.DataFrame):
         amp_lim=[0.0, 10.0],
         s=20,
         fontisize=12,
-        col_names=["amp", "phase"],
+        col_names=["log2fc", "phase"],
     ):
         """
         Takes as input a pandas dataframe with columns "amp_abs", "phphi_peak"
-        doesn't metter the order of the columns
+        doesn't matter the order of the columns
         """
 
         # polar plot stuff
@@ -776,3 +776,83 @@ def cSVD_beta(res, center_around="mean", amp_col="log2fc"):
             V_[:, i] = V[:, i] * rot / max_s
 
     return U_, V_, S_norm
+
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+def plot_beta_shift(
+    beta_1,
+    beta_2,
+    genes=None,
+    amp_lim=[0.0, 10.0],
+    s=40,
+    fontsize=10,
+    col_names=["amp", "phase"],
+    labels=["beta1", "beta2"],
+    color1="tab:blue",
+    color2="tab:orange",
+    line_color="gray",
+):
+    """
+    Compare two Beta objects on a polar plot.
+
+    Parameters
+    ----------
+    beta_1, beta_2 : Beta
+        Two Beta objects with amplitude and phase columns.
+    genes : list or None
+        Genes to plot. If None, use intersection of both indices.
+    amp_lim : [float, float]
+        Range of amplitude values shown.
+    s : int
+        Marker size.
+    fontsize : int
+        Font size for gene labels.
+    col_names : [str, str]
+        Names of the amplitude and phase columns in Beta objects.
+    labels : [str, str]
+        Legend labels for beta_1 and beta_2.
+    color1, color2 : str
+        Colors for beta_1 and beta_2 scatter points.
+    line_color : str
+        Color for connecting lines.
+    """
+
+    # Default: plot genes that are in both objects
+    if genes is None:
+        genes = list(set(beta_1.index).intersection(beta_2.index))
+
+    plt.figure(figsize=(10, 10))
+    ax = plt.subplot(111, projection="polar")
+    ax.set_theta_zero_location("N")
+    ax.set_theta_direction(-1)
+    ax.set_rlabel_position(0)
+    ax.set_xticks(np.linspace(0, 2 * np.pi, 24, endpoint=False))
+    ax.set_xticklabels(np.arange(24))
+    ax.set_title("Beta comparison")
+
+    for j, gene in enumerate(genes):
+        if gene not in beta_1.index or gene not in beta_2.index:
+            continue  # skip if not in both
+
+        amp1, phase1 = beta_1.loc[gene, col_names]
+        amp2, phase2 = beta_2.loc[gene, col_names]
+
+        # Apply amplitude limits
+        if not (amp_lim[0] <= amp1 <= amp_lim[1] and amp_lim[0] <= amp2 <= amp_lim[1]):
+            continue
+
+        # Scatter points (add label only once for legend)
+        ax.scatter(phase1, amp1, s=s, color=color1, label=labels[0] if j == 0 else "")
+        ax.scatter(phase2, amp2, s=s, color=color2, label=labels[1] if j == 0 else "")
+
+        # Line between them
+        ax.plot([phase1, phase2], [amp1, amp2], color=line_color, alpha=0.6)
+
+        # Annotate on the second beta's point
+        ax.annotate(gene, (phase2, amp2), fontsize=fontsize)
+
+    ax.legend(loc="upper right")
+    plt.show()

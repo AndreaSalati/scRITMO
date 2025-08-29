@@ -149,3 +149,16 @@ def add_ccg_back(ccg, listt):
     print(f"ccg removed in the selection {diff}")
     added = set(listt) | set(diff)
     return np.array(list(added))
+
+
+def length_normalized_library_size(adata, layer="spliced", length_var="gene_length"):
+    """
+    Function used to get the length-normalized library size
+    for bulk data. it returns gamma_cg such that
+    f_cg = n_cg / gamma_cg sums to 1 over genes for each sample
+    """
+    n_cg = adata.layers[layer]
+    l_g = adata.var[length_var].values[None, :]
+
+    gamma_cg = l_g * np.sum(n_cg / l_g, axis=1, keepdims=True)
+    return gamma_cg

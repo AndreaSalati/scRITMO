@@ -97,7 +97,7 @@ def _fit_single_gene_glm(
 
     except Exception as e:
         # Build a dictionary with NaNs for failed fits
-        print(f"Warning: Could not fit model for gene {gene_name}: {str(e)}")
+        # print(f"Warning: Could not fit model for gene {gene_name}: {str(e)}")
         result_dict = {"gene": gene_name}
         for h in range(1, n_harmonics + 1):
             result_dict[f"a_{h}"] = np.nan
@@ -290,7 +290,7 @@ def _fit_single_gene_lm(
 
     except Exception as e:
         # Build a dictionary with NaNs for failed fits
-        print(f"Warning: Could not fit model for gene {gene_name}: {str(e)}")
+        # print(f"Warning: Could not fit model for gene {gene_name}: {str(e)}")
         result_dict = {"gene": gene_name}
         for h in range(1, n_harmonics + 1):
             result_dict[f"a_{h}"] = np.nan
