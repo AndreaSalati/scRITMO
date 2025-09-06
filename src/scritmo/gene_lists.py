@@ -1,5 +1,29 @@
 import numpy as np
 
+# human core clock genes
+hccg = np.unique(
+    np.array(
+        [
+            "PER1",
+            "PER2",
+            "PER3",
+            "CRY1",
+            "CRY2",
+            "CLOCK",
+            "ARNTL",
+            "CSNK1D",
+            "CSNK1E",
+            "NR1D1",
+            "NR1D2",
+            "DBP",
+            "TEF",
+            "HLF",
+            "BMAL1",
+        ]
+    )
+)
+
+
 droin_selected = np.array(
     [
         "Abcg5",

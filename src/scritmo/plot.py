@@ -1286,5 +1286,5 @@ def plot_dual_loss(loss_epochs, mad_epochs, title="Training Metrics Over Epochs"
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax2.legend(lines + lines2, labels + labels2, loc="best")
 
-    # Save the plot to a file
-    plt.show()
+    # return axis
+    return fig, ax1, ax2
