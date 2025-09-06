@@ -15,6 +15,7 @@ from sklearn.preprocessing import StandardScaler
 from scipy.sparse import issparse
 from joblib import Parallel, delayed
 from functools import partial
+import warnings
 
 
 # Helper "worker" function to be parallelized
@@ -45,27 +46,33 @@ def _fit_single_gene_glm(
         if isinstance(counts_, pd.DataFrame):
             counts_ = counts_[gene_name].values
 
-        # Select the correct model type based on fit_disp
-        if fit_disp:
-            model = NegativeBinomial(gene_counts, X[mask], offset=np.log(counts_))
-            model_null = NegativeBinomial(
-                gene_counts, X_null[mask], offset=np.log(counts_)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="invalid value encountered in divide",
+                category=RuntimeWarning,
             )
-        else:
-            # Add a pseudocount to prevent log(0) errors
-            pseudocount = 1e-8
-            model = sm.GLM(
-                gene_counts,
-                X[mask],
-                family=sm.families.NegativeBinomial(alpha=fixed_disp),
-                offset=np.log(counts_ + pseudocount),
-            )
-            model_null = sm.GLM(
-                gene_counts,
-                X_null[mask],
-                family=sm.families.NegativeBinomial(alpha=fixed_disp),
-                offset=np.log(counts_ + pseudocount),
-            )
+            # Select the correct model type based on fit_disp
+            if fit_disp:
+                model = NegativeBinomial(gene_counts, X[mask], offset=np.log(counts_))
+                model_null = NegativeBinomial(
+                    gene_counts, X_null[mask], offset=np.log(counts_)
+                )
+            else:
+                # Add a pseudocount to prevent log(0) errors
+                pseudocount = 1e-8
+                model = sm.GLM(
+                    gene_counts,
+                    X[mask],
+                    family=sm.families.NegativeBinomial(alpha=fixed_disp),
+                    offset=np.log(counts_ + pseudocount),
+                )
+                model_null = sm.GLM(
+                    gene_counts,
+                    X_null[mask],
+                    family=sm.families.NegativeBinomial(alpha=fixed_disp),
+                    offset=np.log(counts_ + pseudocount),
+                )
 
         result = model.fit(disp=False)
         result_null = model_null.fit(disp=False)
@@ -81,7 +88,7 @@ def _fit_single_gene_glm(
         # Using McFadden's pseudo-R-squared
         r2 = 1 - (result.llf / result_null.llf)
 
-        result_dict = {"gene": gene_name, "r2": r2}
+        result_dict = {"gene": gene_name}
         param_values = result.params.to_dict()
         result_dict.update(param_values)
 
@@ -92,6 +99,7 @@ def _fit_single_gene_glm(
 
         result_dict["BIC"] = delta_bic
         result_dict["pvalue"] = pval
+        result_dict["r2"] = r2
 
         return result_dict
 
@@ -186,44 +194,63 @@ def glm_gene_fit(
         n_harmonics=n_harmonics,
     )
 
+    # # --- Dispatch to serial or parallel execution ---
+    # if n_jobs == 1:
+    #     print("Running in serial mode.")
+    #     # Determine the counts array slice before the loop
+    #     if counts.ndim == 1:
+    #         # Loop over a single dimension counts array
+    #         results_list = [
+    #             fit_function(
+    #                 gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts
+    #             )
+    #             for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
+    #         ]
+    #     else:
+    #         # Loop over a multi-dimensional counts array
+    #         results_list = [
+    #             fit_function(
+    #                 gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts[:, i]
+    #             )
+    #             for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
+    #         ]
+
+    # else:
+    #     print(f"Running in parallel on {n_jobs} jobs.")
+    #     # The counts.ndim check is now performed before the parallel call
+    #     if counts.ndim == 1:
+    #         results_list = Parallel(n_jobs=n_jobs)(
+    #             delayed(fit_function)(
+    #                 gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts
+    #             )
+    #             for i in tqdm(range(len(genes)), desc="Fitting genes (parallel)")
+    #         )
+    #     else:
+    #         results_list = Parallel(n_jobs=n_jobs)(
+    #             delayed(fit_function)(
+    #                 gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts[:, i]
+    #             )
+    #             for i in tqdm(range(len(genes)), desc="Fitting genes (parallel)")
+    #         )
+
     # --- Dispatch to serial or parallel execution ---
     if n_jobs == 1:
         print("Running in serial mode.")
-        # Determine the counts array slice before the loop
-        if counts.ndim == 1:
-            # Loop over a single dimension counts array
-            results_list = [
-                fit_function(
-                    gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts
-                )
-                for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
-            ]
-        else:
-            # Loop over a multi-dimensional counts array
-            results_list = [
-                fit_function(
-                    gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts[:, i]
-                )
-                for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
-            ]
+
+        results_list = [
+            fit_function(gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts)
+            for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
+        ]
 
     else:
         print(f"Running in parallel on {n_jobs} jobs.")
-        # The counts.ndim check is now performed before the parallel call
-        if counts.ndim == 1:
-            results_list = Parallel(n_jobs=n_jobs)(
-                delayed(fit_function)(
-                    gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts
-                )
-                for i in tqdm(range(len(genes)), desc="Fitting genes (parallel)")
+
+        results_list = Parallel(n_jobs=n_jobs)(
+            delayed(fit_function)(
+                gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts
             )
-        else:
-            results_list = Parallel(n_jobs=n_jobs)(
-                delayed(fit_function)(
-                    gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts[:, i]
-                )
-                for i in tqdm(range(len(genes)), desc="Fitting genes (parallel)")
-            )
+            for i in tqdm(range(len(genes)), desc="Fitting genes (parallel)")
+        )
 
     # --- The final cleanup and DataFrame creation remains the same ---
     results_list = [r for r in results_list if r is not None]

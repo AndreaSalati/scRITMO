@@ -161,4 +161,6 @@ def length_normalized_library_size(adata, layer="spliced", length_var="gene_leng
     l_g = adata.var[length_var].values[None, :]
 
     gamma_cg = l_g * np.sum(n_cg / l_g, axis=1, keepdims=True)
+    # dataframe with same index and columns as n_cg
+    gamma_cg = pd.DataFrame(gamma_cg, index=adata.obs_names, columns=adata.var_names)
     return gamma_cg
