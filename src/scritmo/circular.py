@@ -90,7 +90,13 @@ def cSTD(theta, adjust=False):
 
 
 def optimal_shift(
-    p, p0, n_s=200, return_shift=False, return_shift_only=False, allow_flip=True
+    p,
+    p0,
+    n_s=200,
+    return_shift=False,
+    return_shift_only=False,
+    allow_flip=True,
+    verbose=True,
 ):
     """
     Aligns two sequences defined on the unit circle, taking care of the periodicity
@@ -142,7 +148,8 @@ def optimal_shift(
             best_mad = mad
             best_shift = shifts[best_shift_ind]
         else:
-            print("Flipping occurred")
+            if verbose:
+                print("Flipping occurred")
             phi_aligned = theta_cs_neg[:, best_shift_ind_neg]
             best_mad = mad_neg
             best_shift = shifts[best_shift_ind_neg]
