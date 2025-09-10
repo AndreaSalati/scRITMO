@@ -233,6 +233,16 @@ def compute_posterior_statistics(l_xc):
     return post_mean_c, post_var_c, post_std_c
 
 
+def compute_posterior_mean(l_xc):
+    """
+    Compute posterior circular statistics.
+    To be sure that l_xc is a discrete pdf it re normalizes it.
+    """
+    l_xc = l_xc / l_xc.sum(axis=0)
+    post_mean_c = np.apply_along_axis(circ_mean_P, 0, l_xc)
+    return post_mean_c
+
+
 # fucntions that used to get the moments of the numerical approximation of the
 # posterior distribution of the phase
 def circ_mean_P(P):
