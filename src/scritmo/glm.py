@@ -46,36 +46,36 @@ def _fit_single_gene_glm(
         if isinstance(counts_, pd.DataFrame):
             counts_ = counts_[gene_name].values
 
+        # Select the correct model type based on fit_disp
+        if fit_disp:
+            model = NegativeBinomial(gene_counts, X[mask], offset=np.log(counts_))
+            model_null = NegativeBinomial(
+                gene_counts, X_null[mask], offset=np.log(counts_)
+            )
+        else:
+            # Add a pseudocount to prevent log(0) errors
+            pseudocount = 1e-8
+            model = sm.GLM(
+                gene_counts,
+                X[mask],
+                family=sm.families.NegativeBinomial(alpha=fixed_disp),
+                offset=np.log(counts_ + pseudocount),
+            )
+            model_null = sm.GLM(
+                gene_counts,
+                X_null[mask],
+                family=sm.families.NegativeBinomial(alpha=fixed_disp),
+                offset=np.log(counts_ + pseudocount),
+            )
+
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
                 message="invalid value encountered in divide",
                 category=RuntimeWarning,
             )
-            # Select the correct model type based on fit_disp
-            if fit_disp:
-                model = NegativeBinomial(gene_counts, X[mask], offset=np.log(counts_))
-                model_null = NegativeBinomial(
-                    gene_counts, X_null[mask], offset=np.log(counts_)
-                )
-            else:
-                # Add a pseudocount to prevent log(0) errors
-                pseudocount = 1e-8
-                model = sm.GLM(
-                    gene_counts,
-                    X[mask],
-                    family=sm.families.NegativeBinomial(alpha=fixed_disp),
-                    offset=np.log(counts_ + pseudocount),
-                )
-                model_null = sm.GLM(
-                    gene_counts,
-                    X_null[mask],
-                    family=sm.families.NegativeBinomial(alpha=fixed_disp),
-                    offset=np.log(counts_ + pseudocount),
-                )
-
-        result = model.fit(disp=False)
-        result_null = model_null.fit(disp=False)
+            result = model.fit(disp=False)
+            result_null = model_null.fit(disp=False)
 
         llr = 2 * (result.llf - result_null.llf)
         pval = 1 - chi2.cdf(llr, 2)
@@ -131,15 +131,54 @@ def glm_gene_fit(
     use_mi=None,
     n_jobs=-1,
     pseudobulk_by=None,
+    pb_replicates=1,
 ):
     """
     Fits gene expression data to a harmonic model using statsmodels.
     Runs in parallel if n_jobs != 1.
-    ... (rest of docstring) ...
+
+    Parameters:
+    ----------
+    data : AnnData
+        AnnData object containing the expression data.
+    phases : array-like
+        Array of phases in radians for each cell/sample.
+    genes : list of str, optional
+        List of gene names to fit. If None, all genes in data.var_names are used.
+    counts : array-like, optional
+        Total counts per cell/sample for offset. If None, computed from data.
+        In case of bulk, can be a DataFrame with genes as columns.
+    fixed_disp : float, default=0.1
+        Fixed dispersion value if fit_disp is False.
+    fit_disp : bool, default=False
+        If True, fits the dispersion parameter for each gene.
+    layer : str, default="spliced"
+        Layer in AnnData to use for expression data.
+    n_harmonics : int, default=1
+        Number of harmonics to include in the model.
+    outlier_treshold : float, default=98.0
+        Percentile threshold to exclude outliers in gene expression.
+    use_mi : str or None, default=None
+        If 'classif', computes mutual information with a discrete label in data.obs.
+        If 'reg', computes mutual information with the continuous phase.
+        If None, MI is not computed.
+    n_jobs : int, default=-1
+        Number of parallel jobs. -1 uses all available cores. 1 runs in serial.
+    pseudobulk_by : list of str or None, default=None
+        If provided, pseudobulks the data by these obs keys before fitting.
     """
-    if pseudobulk_by is not None:
-        data = pseudobulk(data, pseudobulk_by, layer)
-        phases = data.obs.ZTmod.values * (2 * np.pi / 24)
+    if pseudobulk_by:
+        data = pseudobulk(
+            data,
+            groupby_obs_list=pseudobulk_by,
+            pseudobulk_layer=layer,
+            n_replicates=pb_replicates,
+        )
+
+        data.layers[layer] = data.layers["sum"]
+        # data_c = data[:, genes].layers[layer]
+        phases = data.obs["ZTmod"].values * w
+        outlier_treshold = 100.0  # no outlier removal in pseudobulk
 
     if genes is None:
         genes = data.var_names.tolist()
@@ -152,17 +191,6 @@ def glm_gene_fit(
         data_c = data[:, genes].X
     else:
         data_c = data[:, genes].layers[layer]
-
-    if pseudobulk_by:
-        pb = pseudobulk(
-            data,
-            groupby_obs_list=pseudobulk_by,
-            pseudobulk_layer=layer,
-        )
-        data = pb
-        data.layers[layer] = data.layers["sum"]
-        data_c = data[:, genes].layers[layer]
-        phases = pb.obs["ZTmod"].values * w
 
     try:
         data_c = data_c.toarray()
@@ -194,45 +222,6 @@ def glm_gene_fit(
         n_harmonics=n_harmonics,
     )
 
-    # # --- Dispatch to serial or parallel execution ---
-    # if n_jobs == 1:
-    #     print("Running in serial mode.")
-    #     # Determine the counts array slice before the loop
-    #     if counts.ndim == 1:
-    #         # Loop over a single dimension counts array
-    #         results_list = [
-    #             fit_function(
-    #                 gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts
-    #             )
-    #             for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
-    #         ]
-    #     else:
-    #         # Loop over a multi-dimensional counts array
-    #         results_list = [
-    #             fit_function(
-    #                 gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts[:, i]
-    #             )
-    #             for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
-    #         ]
-
-    # else:
-    #     print(f"Running in parallel on {n_jobs} jobs.")
-    #     # The counts.ndim check is now performed before the parallel call
-    #     if counts.ndim == 1:
-    #         results_list = Parallel(n_jobs=n_jobs)(
-    #             delayed(fit_function)(
-    #                 gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts
-    #             )
-    #             for i in tqdm(range(len(genes)), desc="Fitting genes (parallel)")
-    #         )
-    #     else:
-    #         results_list = Parallel(n_jobs=n_jobs)(
-    #             delayed(fit_function)(
-    #                 gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts[:, i]
-    #             )
-    #             for i in tqdm(range(len(genes)), desc="Fitting genes (parallel)")
-    #         )
-
     # --- Dispatch to serial or parallel execution ---
     if n_jobs == 1:
         print("Running in serial mode.")
@@ -259,6 +248,8 @@ def glm_gene_fit(
         return pd.DataFrame()
 
     params_g = pd.DataFrame(results_list).set_index("gene")
+    # remove all columns with NaN a_0
+    params_g = params_g.dropna(subset=["a_0"])
 
     params_g["pvalue_correctedBH"] = benjamini_hochberg_correction(
         params_g["pvalue"].values
