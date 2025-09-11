@@ -847,7 +847,7 @@ def plot_phase_polar(
 
 def plot_phase_polar_single_ct(
     ct,
-    cell_type,
+    cell_type_list,
     time,
     phase,
     sample_name=None,
@@ -869,7 +869,7 @@ def plot_phase_polar_single_ct(
 
     cmap = plt.get_cmap(cmap_name)
 
-    mask_ct = cell_type == ct
+    mask_ct = cell_type_list == ct
     times_ct = time[mask_ct]
     phases_ct = phase[mask_ct]
     samples_ct = sample_name[mask_ct] if sample_name is not None else None
