@@ -419,9 +419,14 @@ def plot_circadian_data(
 
     # Get expression values
     if layer is None:
-        expression = adata[:, g].X.toarray().squeeze()
+        expression = adata[:, g].X
     else:
-        expression = adata[:, g].layers[layer].toarray().squeeze()
+        expression = adata[:, g].layers[layer]
+
+    try:
+        expression = expression.toarray().squeeze()
+    except AttributeError:
+        expression = expression.squeeze()
 
     if n_bins is not None:
         # Bin the data
@@ -479,8 +484,8 @@ def plot_circadian_data_and_fit(
     phis,
     g,
     params_g,
+    layer,
     ax=None,
-    layer="spliced",
     n_bins=None,
     alpha=0.7,
     line_color="red",
@@ -845,6 +850,29 @@ def plot_phase_polar(
         plt.show()
 
 
+def get_high_contrast_colors(cmap_name, num_colors):
+    """
+    Generates a list of high-contrast colors by reordering a colormap.
+    """
+    cmap = plt.get_cmap(cmap_name)
+
+    # Generate initial indices
+    indices = np.arange(num_colors)
+
+    # Reorder indices by interleaving the first and second half
+    # e.g., for 10 colors, indices [0,1,2,3,4,5,6,7,8,9] -> [0,5,1,6,2,7,3,8,4,9]
+    half = (num_colors + 1) // 2
+    reordered_indices = np.empty(num_colors, dtype=int)
+    reordered_indices[0::2] = indices[:half]
+    reordered_indices[1::2] = indices[half:]
+
+    # Get colors from the colormap using the reordered indices
+    color_fractions = reordered_indices / num_colors
+    colors = cmap(color_fractions)
+
+    return colors
+
+
 def plot_phase_polar_single_ct(
     ct,
     cell_type_list,
@@ -852,10 +880,11 @@ def plot_phase_polar_single_ct(
     phase,
     sample_name=None,
     amplitude=None,
-    plot_type="density",
+    plot_type="histogram",
     cmap_name="twilight",
     bins=30,
     ylim=None,
+    color_order="linear",
 ):
     """
     same thing as before, jsut returns the ax and fig objects
@@ -897,7 +926,10 @@ def plot_phase_polar_single_ct(
     ax.set_xticks(angles)
     ax.set_xticklabels([f"ZT{h:02d}" for h in hour_ticks], fontsize=10)
 
-    base_colors = cmap(np.linspace(0, 1, len(zts), endpoint=False))
+    if color_order == "linear":
+        base_colors = cmap(np.linspace(0, 1, len(zts), endpoint=False))
+    else:
+        base_colors = get_high_contrast_colors(cmap_name, len(zts))
     theta_vals = np.linspace(0, 2 * np.pi, 200, endpoint=False)
 
     for i, zt in enumerate(zts):

@@ -24,7 +24,47 @@ def circular_deviation(x, y, period):
     return np.minimum(v1, v2)
 
 
-def circular_median_absolute_deviation(x, y, period):
+def circular_square_error(x, y, period):
+    """
+    It computes the circular absolute deviation between two vectors x and y
+    PASS SQUEEZED ARRAYS
+    Inputs:
+    x: phase array
+    y: phase array
+    period: period of the circular variable
+    """
+    if x.ndim > 1 or y.ndim > 1:
+        print(
+            "WARNING: Both x and y must be 1D arrays, or output of the function will be wrong"
+        )
+    x, y = x % period, y % period
+    v1 = (x.squeeze() - y.squeeze()) ** 2
+    v2 = (period - v1) ** 2
+
+    return np.minimum(v1, v2)
+
+
+def median_SE(x, y, period):
+    """
+    It computes the circular mean absolute deviation between two vectors x and y
+    PASS SQUEEZED ARRAYS
+    """
+    # throw error if x and y are not squeezed
+
+    v = circular_square_error(x, y, period)
+    return np.median(v)
+
+
+def mean_SE(x, y, period):
+    """
+    It computes the circular mean absolute deviation between two vectors x and y
+    PASS SQUEEZED ARRAYS
+    """
+    v = circular_square_error(x, y, period)
+    return np.mean(v)
+
+
+def median_AE(x, y, period):
     """
     It computes the circular mean absolute deviation between two vectors x and y
     PASS SQUEEZED ARRAYS
@@ -35,7 +75,7 @@ def circular_median_absolute_deviation(x, y, period):
     return np.median(v)
 
 
-def circular_mean_absolute_deviation(x, y, period):
+def mean_AE(x, y, period):
     """
     It computes the circular mean absolute deviation between two vectors x and y
     PASS SQUEEZED ARRAYS

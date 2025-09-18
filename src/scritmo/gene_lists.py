@@ -1,5 +1,10 @@
 import numpy as np
 
+# drosophila core clock genes
+dccg = np.array(
+    ["Argk1", "Cipc", "Clk", "Pdp1", "cry", "cwo", "pdp1", "per", "tim", "vri"]
+)
+
 # human core clock genes
 hccg = np.unique(
     np.array(
