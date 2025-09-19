@@ -160,6 +160,9 @@ def length_normalized_library_size(adata, layer="spliced", length_var="gene_leng
     """
     n_cg = adata.layers[layer]
     l_g = adata.var[length_var].values[None, :]
+    # try to convert n_cg to dense if sparse
+    if hasattr(n_cg, "toarray"):
+        n_cg = n_cg.toarray()
 
     gamma_cg = l_g * np.sum(n_cg / l_g, axis=1, keepdims=True)
     # dataframe with same index and columns as n_cg
