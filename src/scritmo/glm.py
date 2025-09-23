@@ -18,54 +18,77 @@ from functools import partial
 import warnings
 
 
-# Helper "worker" function to be parallelized
 def _fit_single_gene_glm(
     gene_name,
     gene_counts,
     X,
     X_null,
     counts_,
-    fixed_disp,
-    fit_disp,
-    outlier_treshold,
-    n_harmonics,
+    noise_model="nb",
+    fixed_disp=None,
+    fit_disp=True,
+    outlier_treshold=99,
+    n_harmonics=None,  # Parameter kept in signature for compatibility
 ):
-    """Fits the GLM for a single gene. To be called by the parallelized main function."""
+    """
+    Fits a model for a single gene with selectable noise distributions.
+
+    Supports Negative Binomial ('nb'), Poisson ('poisson'), and
+    Gaussian ('gaussian') noise models.
+    """
     try:
+        # --- 1. Data Filtering ---
         threshold = np.percentile(gene_counts, outlier_treshold)
         mask = gene_counts <= threshold
 
         if mask.sum() == 0:
-            # Return None if the gene cannot be processed
+            # Return None if no data remains after filtering
             return None
 
         gene_counts = gene_counts[mask]
         counts_ = counts_[mask]
+        X = X[mask]
+        X_null = X_null[mask]
 
-        # In case I am using bulk data, which has a gene dependent offset
         if isinstance(counts_, pd.DataFrame):
             counts_ = counts_[gene_name].values
 
-        # Select the correct model type based on fit_disp
-        if fit_disp:
-            model = NegativeBinomial(gene_counts, X[mask], offset=np.log(counts_))
-            model_null = NegativeBinomial(
-                gene_counts, X_null[mask], offset=np.log(counts_)
-            )
+        # --- 2. Model Selection and Initialization ---
+        model = None
+        model_null = None
+        pseudocount = 1e-8  # Add a pseudocount to prevent log(0) errors
+
+        if noise_model == "nb":
+            offset = np.log(counts_ + pseudocount)
+            if fit_disp:
+                # Alpha (dispersion) is estimated automatically by the fit method
+                family = sm.families.NegativeBinomial()
+            else:
+                if fixed_disp is None:
+                    raise ValueError(
+                        "Argument 'fixed_disp' must be provided for Negative Binomial model when 'fit_disp' is False."
+                    )
+                # Use a fixed alpha
+                family = sm.families.NegativeBinomial(alpha=fixed_disp)
+
+            model = sm.GLM(gene_counts, X, family=family, offset=offset)
+            model_null = sm.GLM(gene_counts, X_null, family=family, offset=offset)
+
+        elif noise_model == "poisson":
+            offset = np.log(counts_ + pseudocount)
+            family = sm.families.Poisson()
+            model = sm.GLM(gene_counts, X, family=family, offset=offset)
+            model_null = sm.GLM(gene_counts, X_null, family=family, offset=offset)
+
+        elif noise_model == "gaussian":
+            # For a Gaussian model, we use Ordinary Least Squares (OLS).
+            # OLS does not use an offset term for exposure.
+            model = sm.OLS(gene_counts, X)
+            model_null = sm.OLS(gene_counts, X_null)
+
         else:
-            # Add a pseudocount to prevent log(0) errors
-            pseudocount = 1e-8
-            model = sm.GLM(
-                gene_counts,
-                X[mask],
-                family=sm.families.NegativeBinomial(alpha=fixed_disp),
-                offset=np.log(counts_ + pseudocount),
-            )
-            model_null = sm.GLM(
-                gene_counts,
-                X_null[mask],
-                family=sm.families.NegativeBinomial(alpha=fixed_disp),
-                offset=np.log(counts_ + pseudocount),
+            raise ValueError(
+                f"Unknown noise_model: '{noise_model}'. Choose from 'nb', 'poisson', or 'gaussian'."
             )
 
         with warnings.catch_warnings():
@@ -132,6 +155,7 @@ def glm_gene_fit(
     n_jobs=-1,
     pseudobulk_by=None,
     pb_replicates=1,
+    noise_model="nb",
 ):
     """
     Fits gene expression data to a harmonic model using statsmodels.
@@ -220,6 +244,7 @@ def glm_gene_fit(
         fit_disp=fit_disp,
         outlier_treshold=outlier_treshold,
         n_harmonics=n_harmonics,
+        noise_model=noise_model,
     )
 
     # --- Dispatch to serial or parallel execution ---
