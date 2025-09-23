@@ -287,6 +287,7 @@ ccg = np.unique(
             "Per3",
             "Bmal1",
             "Rorc",
+            "Ciart",
         ]
     )
 )
