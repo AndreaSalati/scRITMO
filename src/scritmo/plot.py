@@ -1335,3 +1335,9 @@ def plot_dual_loss(loss_epochs, mad_epochs, title="Training Metrics Over Epochs"
 
     # return axis
     return fig, ax1, ax2
+
+
+def hist(x, bins=30):
+    _, _, _ = plt.hist(x, bins=bins)
+    plt.show()
+    return
