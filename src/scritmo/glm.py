@@ -24,11 +24,11 @@ def _fit_single_gene_glm(
     X,
     X_null,
     counts_,
+    outlier_threshold,
     noise_model="nb",
     fixed_disp=None,
     fit_disp=True,
     n_harmonics=None,  # Parameter kept in signature for compatibility
-    outlier_treshold,
     show_warnings=False,  # New parameter for the switch
 ):
     """
@@ -39,7 +39,7 @@ def _fit_single_gene_glm(
     """
     try:
         # --- 1. Data Filtering ---
-        threshold = np.percentile(gene_counts, outlier_treshold)
+        threshold = np.percentile(gene_counts, outlier_threshold)
         mask = gene_counts <= threshold
 
         if mask.sum() == 0:
@@ -156,14 +156,13 @@ def glm_gene_fit(
     fit_disp=False,
     layer="spliced",
     n_harmonics=1,
-    outlier_treshold=98.0,
+    outlier_threshold=98.0,
     use_mi=None,
     n_jobs=-1,
     pseudobulk_by=None,
     pb_replicates=1,
     noise_model="nb",
     show_warnings=False,  # New parameter for the switch
-
 ):
     """
     Fits gene expression data to a harmonic model using statsmodels.
@@ -188,7 +187,7 @@ def glm_gene_fit(
         Layer in AnnData to use for expression data.
     n_harmonics : int, default=1
         Number of harmonics to include in the model.
-    outlier_treshold : float, default=98.0
+    outlier_threshold : float, default=98.0
         Percentile threshold to exclude outliers in gene expression.
     use_mi : str or None, default=None
         If 'classif', computes mutual information with a discrete label in data.obs.
@@ -210,7 +209,7 @@ def glm_gene_fit(
         data.layers[layer] = data.layers["sum"]
         # data_c = data[:, genes].layers[layer]
         phases = data.obs["ZTmod"].values * w
-        outlier_treshold = 100.0  # no outlier removal in pseudobulk
+        outlier_threshold = 100.0  # no outlier removal in pseudobulk
 
     if genes is None:
         genes = data.var_names.tolist()
@@ -250,7 +249,7 @@ def glm_gene_fit(
         # counts_=counts,
         fixed_disp=fixed_disp,
         fit_disp=fit_disp,
-        outlier_treshold=outlier_treshold,
+        outlier_threshold=outlier_threshold,
         n_harmonics=n_harmonics,
         noise_model=noise_model,
         show_warnings=show_warnings,
@@ -303,12 +302,12 @@ def glm_gene_fit(
 
 # Helper "worker" function to be parallelized for LM (NEW)
 def _fit_single_gene_lm(
-    gene_name, gene_expression, X, X_null, outlier_treshold, n_harmonics
+    gene_name, gene_expression, X, X_null, outlier_threshold, n_harmonics
 ):
     """Fits the OLS for a single gene. To be called by the parallelized main function."""
     try:
         # Apply outlier thresholding
-        threshold = np.percentile(gene_expression, outlier_treshold)
+        threshold = np.percentile(gene_expression, outlier_threshold)
         mask = gene_expression <= threshold
 
         if mask.sum() == 0:
@@ -361,7 +360,7 @@ def lm_gene_fit(
     genes=None,
     layer=None,
     n_harmonics=1,
-    outlier_treshold=100.0,  # Default to 100 to include all data
+    outlier_threshold=100.0,  # Default to 100 to include all data
     n_jobs=-1,
 ):
     """
@@ -406,7 +405,7 @@ def lm_gene_fit(
         _fit_single_gene_lm,
         X=X,
         X_null=X_null,
-        outlier_treshold=outlier_treshold,
+        outlier_threshold=outlier_threshold,
         n_harmonics=n_harmonics,
     )
 
