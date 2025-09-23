@@ -29,6 +29,7 @@ def _fit_single_gene_glm(
     fit_disp,
     outlier_treshold,
     n_harmonics,
+    show_warnings=False,  # New parameter for the switch
 ):
     """Fits the GLM for a single gene. To be called by the parallelized main function."""
     try:
@@ -68,14 +69,19 @@ def _fit_single_gene_glm(
                 offset=np.log(counts_ + pseudocount),
             )
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="invalid value encountered in divide",
-                category=RuntimeWarning,
-            )
+        # Conditional block for warnings
+        if show_warnings:
             result = model.fit(disp=False)
             result_null = model_null.fit(disp=False)
+        else:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="invalid value encountered in divide",
+                    category=RuntimeWarning,
+                )
+                result = model.fit(disp=False)
+                result_null = model_null.fit(disp=False)
 
         llr = 2 * (result.llf - result_null.llf)
         pval = 1 - chi2.cdf(llr, 2)
@@ -132,6 +138,7 @@ def glm_gene_fit(
     n_jobs=-1,
     pseudobulk_by=None,
     pb_replicates=1,
+    show_warnings=False,  # New parameter for the switch
 ):
     """
     Fits gene expression data to a harmonic model using statsmodels.
@@ -220,6 +227,7 @@ def glm_gene_fit(
         fit_disp=fit_disp,
         outlier_treshold=outlier_treshold,
         n_harmonics=n_harmonics,
+        show_warnings=show_warnings,
     )
 
     # --- Dispatch to serial or parallel execution ---
