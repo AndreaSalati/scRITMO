@@ -130,7 +130,13 @@ def polar_plot_shifts(title: str = "", inner_ring_size: float = 0, angle: float 
 
 
 def scatter_with_labels(
-    x, y, labels, fontsize=10, s=200, arrowstyle="-", color_arr="black"
+    x,
+    y,
+    labels,
+    fontsize=10,
+    arrowstyle="-",
+    color_arr="black",
+    adjust=True,
 ):
     """
     Plots a scatter and annotates it with non-overlapping labels.
@@ -145,7 +151,16 @@ def scatter_with_labels(
     texts = []
     for xi, yi, label in zip(x, y, labels):
         texts.append(plt.text(xi, yi, label, fontsize=fontsize))
-    adjust_text(texts, arrowprops=dict(arrowstyle=arrowstyle, color=color_arr, lw=0.5))
+
+    if adjust:
+        adjust_text(
+            texts, arrowprops=dict(arrowstyle=arrowstyle, color=color_arr, lw=0.5)
+        )
+    else:
+
+        # annotate
+        for i, label in enumerate(labels):
+            plt.text(x[i], y[i], label, fontsize=fontsize)
 
 
 def biplot(

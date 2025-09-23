@@ -27,8 +27,9 @@ def _fit_single_gene_glm(
     noise_model="nb",
     fixed_disp=None,
     fit_disp=True,
-    outlier_treshold=99,
     n_harmonics=None,  # Parameter kept in signature for compatibility
+    outlier_treshold,
+    show_warnings=False,  # New parameter for the switch
 ):
     """
     Fits a model for a single gene with selectable noise distributions.
@@ -91,14 +92,19 @@ def _fit_single_gene_glm(
                 f"Unknown noise_model: '{noise_model}'. Choose from 'nb', 'poisson', or 'gaussian'."
             )
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="invalid value encountered in divide",
-                category=RuntimeWarning,
-            )
+        # Conditional block for warnings
+        if show_warnings:
             result = model.fit(disp=False)
             result_null = model_null.fit(disp=False)
+        else:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="invalid value encountered in divide",
+                    category=RuntimeWarning,
+                )
+                result = model.fit(disp=False)
+                result_null = model_null.fit(disp=False)
 
         llr = 2 * (result.llf - result_null.llf)
         pval = 1 - chi2.cdf(llr, 2)
@@ -156,6 +162,8 @@ def glm_gene_fit(
     pseudobulk_by=None,
     pb_replicates=1,
     noise_model="nb",
+    show_warnings=False,  # New parameter for the switch
+
 ):
     """
     Fits gene expression data to a harmonic model using statsmodels.
@@ -245,6 +253,7 @@ def glm_gene_fit(
         outlier_treshold=outlier_treshold,
         n_harmonics=n_harmonics,
         noise_model=noise_model,
+        show_warnings=show_warnings,
     )
 
     # --- Dispatch to serial or parallel execution ---
