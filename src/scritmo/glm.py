@@ -106,16 +106,24 @@ def _fit_single_gene_glm(
                 result = model.fit(disp=False)
                 result_null = model_null.fit(disp=False)
 
-        llr = 2 * (result.llf - result_null.llf)
-        pval = 1 - chi2.cdf(llr, 2)
         bic = -2 * result.llf + np.log(len(gene_counts)) * (len(result.params) + 1)
         bic_null = -2 * result_null.llf + np.log(len(gene_counts)) * (
             len(result_null.params) + 1
         )
         delta_bic = bic - bic_null
 
-        # Using McFadden's pseudo-R-squared
-        r2 = 1 - (result.llf / result_null.llf)
+        if noise_model == "gaussian":
+            # For OLS, use the standard R-squared based on variance
+            r2 = result.rsquared
+            # pval from nested F-test
+            pval = result.f_pvalue
+        else:
+            # For GLMs (NB, Poisson), use McFadden's pseudo R-squared
+            r2 = 1 - (result.llf / result_null.llf)
+            # pval
+            df_diff = result.df_model - result_null.df_model
+            llr = 2 * (result.llf - result_null.llf)
+            pval = 1 - chi2.cdf(llr, df_diff)
 
         result_dict = {"gene": gene_name}
         param_values = result.params.to_dict()
