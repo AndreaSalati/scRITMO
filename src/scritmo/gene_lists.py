@@ -288,6 +288,7 @@ ccg = np.unique(
             "Bmal1",
             "Rorc",
             "Ciart",
+            "Clock",
         ]
     )
 )
