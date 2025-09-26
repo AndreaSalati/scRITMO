@@ -451,7 +451,7 @@ class Beta(pd.DataFrame):
         if "phase" in self.columns:
             self["phase"] = (self["phase"] + phi) % (2 * np.pi)
 
-    def fix_to_gene(self, gene_name, gene_phase):
+    def fix_to_gene(self, gene_name, gene_phase, return_phi=False):
         """
         Rotate the beta values so that gene_name has phase gene_phase.
         """
@@ -460,6 +460,8 @@ class Beta(pd.DataFrame):
         current_phase = self.loc[gene_name, "phase"]
         phi = (gene_phase - current_phase) % (2 * np.pi)
         self.rotate(phi)
+        if return_phi:
+            return phi
 
     def rescale_amp(self, kappa):
         """

@@ -1341,3 +1341,10 @@ def hist(x, bins=30):
     _, _, _ = plt.hist(x, bins=bins)
     plt.show()
     return
+
+
+def phist(x, bins=30, title="", inner_ring_size=0.0):
+    polar_plot(title=title, inner_ring_size=inner_ring_size)
+    _, _, _ = plt.hist(x, bins=bins)
+    plt.show()
+    return
