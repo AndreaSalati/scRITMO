@@ -3,7 +3,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scritmo.linear_regression import polar_genes_pandas
 from scritmo.basics import w, rh, ind2
-import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from adjustText import adjust_text

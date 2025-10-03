@@ -12,16 +12,25 @@ import seaborn as sns
 from scipy.stats import vonmises
 
 
-def xy(color="red", linestyle="--"):
+def xy(color="red", linestyle="--", legend_label=""):
     plt.axline(
         (0, 0),
         slope=1,
         color=color,
         linestyle=linestyle,
+        label=legend_label,
     )
 
 
-def polar_plot(title="", inner_ring_size=0, show_rlabels=True, show_grid=True):
+def polar_plot(
+    title="",
+    inner_ring_size=0,
+    show_rlabels=True,
+    show_grid=True,
+    theta_min=0,
+    theta_max=2 * np.pi,
+    aperture=None,
+):
     """
     This function returns the ax object that can be used to plot the polar plot
     or histogram.
@@ -36,7 +45,17 @@ def polar_plot(title="", inner_ring_size=0, show_rlabels=True, show_grid=True):
         If False, removes radial axis labels (numbers). Default is True.
     show_grid : bool, optional
         If False, removes polar grid lines. Default is True.
+    theta_min : float, optional
+        Minimum angle (in radians) to display. Default is 0.
+    theta_max : float, optional
+        Maximum angle (in radians) to display. Default is 2π.
+    aperture : float, optional
+        If provided, sets theta_min = -aperture/2 and theta_max = aperture/2.
     """
+    if aperture is not None:
+        theta_min = -aperture / 2
+        theta_max = aperture / 2
+
     plt.figure(figsize=(10, 10))
     ax = plt.subplot(111, projection="polar")
     ax.set_theta_zero_location("N")
@@ -50,6 +69,9 @@ def polar_plot(title="", inner_ring_size=0, show_rlabels=True, show_grid=True):
         ax.set_yticklabels([])
     if not show_grid:
         ax.grid(False)
+    # Set the angular span
+    ax.set_thetamin(np.degrees(theta_min))
+    ax.set_thetamax(np.degrees(theta_max))
     return ax
 
 
