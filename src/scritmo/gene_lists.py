@@ -272,24 +272,24 @@ clock = np.array(
     ]
 )
 # core clock , with Ciart
-ccg = np.unique(
-    np.array(
-        [
-            "Npas2",
-            "Cry1",
-            "Per1",
-            "Per2",
-            "Nr1d1",
-            "Nr1d2",
-            "Tef",
-            "Dbp",
-            "Ciart",
-            "Per3",
-            "Bmal1",
-            "Rorc",
-            "Ciart",
-        ]
-    )
+ccg = np.array(
+    [
+        "Bhlhe40",
+        "Bhlhe41",
+        "Bmal1",
+        "Ciart",
+        "Clock",
+        "Cry1",
+        "Dbp",
+        "Npas2",
+        "Nr1d1",
+        "Nr1d2",
+        "Per1",
+        "Per2",
+        "Per3",
+        "Rorc",
+        "Tef",
+    ]
 )
 
 # first pan list, no Ciart,  + Nfil3 + Hlf + Bhlhe41

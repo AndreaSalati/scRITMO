@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import re
 from adjustText import adjust_text
+from .plot.utils import polar_plot
 
 
 class Beta(pd.DataFrame):
@@ -30,25 +31,6 @@ class Beta(pd.DataFrame):
 
         # now init the DataFrame
         super().__init__(data, **kwargs)
-
-    def convert_old_notation(self):
-        """
-        Rename m_g → a_0, a_g → a_1, b_g → b_1
-        then reorder so that the first three columns are [a_0, a_1, b_1], with all data aligned.
-        """
-        # 1) build your rename mapping
-        mapping = {}
-        for col in self.columns:
-            if col.startswith("m_"):
-                mapping[col] = "a_0"
-            elif col.startswith(("a_", "b_")):
-                prefix, old_idx = col.split("_", 1)
-                new_idx = "1" if old_idx == "g" else old_idx
-                mapping[col] = f"{prefix}_{new_idx}"
-
-        # 2) apply the rename in one shot
-        if mapping:
-            self.rename(columns=mapping, inplace=True)
 
     def get_ab_column_names(self, nh=None, keep_a_0=True):
         """
@@ -188,54 +170,73 @@ class Beta(pd.DataFrame):
         else:
             return np.exp(X @ beta.T.values)
 
-    def get_amp(self, Ndense=1000, inplace=False):
+    def get_amp(self, Ndense=1000, inplace=False, extended=False):
         """
         Get the amplitude of the beta values.
-        Be ware if you fit was done in log and with which base:
-        log2fc assumes that the fit was done i, base e, and
-        converts it to log2
+
+        This function now includes an 'extended' parameter to control
+        which columns are returned.
+
+        Args:
+            Ndense (int): Number of points to use for the calculation.
+            inplace (bool): Whether to modify the model object in place.
+            extended (bool): If True, computes and includes 'y_mean', 'y_min',
+                             'y_max', and 'amp_abs'. Otherwise, only
+                             'phase', 'amp', and 'log2fc' are computed.
         """
         if self is None:
             raise ValueError("Model is not fitted yet. Call fit() first.")
+
         phi_dense = np.linspace(0, 2 * np.pi, Ndense, endpoint=False)
         y_dense = self.predict(phi_dense)
 
         out = []
         for gene in range(y_dense.shape[1]):
-            y_mean = np.mean(y_dense[:, gene])
-            y_max = np.max(y_dense[:, gene])
-            y_min = np.min(y_dense[:, gene])
-            amp_abs = y_max - y_min
-            amp = amp_abs / 2
-            # amp_fc = y_max / y_min if y_min != 0 else np.inf
-            amp
+            # Common calculations
+            amp = (np.max(y_dense[:, gene]) - np.min(y_dense[:, gene])) / 2
             phase = phi_dense[np.argmax(y_dense[:, gene])]
             log2fc = np.log2(np.e) * 2 * amp
 
-            out.append([y_mean, y_min, y_max, amp_abs, phase, amp, log2fc])
-        cols = [
-            "y_mean",
-            "y_min",
-            "y_max",
-            "amp_abs",
-            "phase",
-            "amp",
-            "log2fc",
-        ]
+            if extended:
+                y_mean = np.mean(y_dense[:, gene])
+                y_min = np.min(y_dense[:, gene])
+                y_max = np.max(y_dense[:, gene])
+                amp_abs = y_max - y_min
+                out.append([y_mean, y_min, y_max, amp_abs, phase, amp, log2fc])
+            else:
+                out.append([phase, amp, log2fc])
+
+        # Define columns based on the 'extended' parameter
+        if extended:
+            cols = [
+                "y_mean",
+                "y_min",
+                "y_max",
+                "amp_abs",
+                "phase",
+                "amp",
+                "log2fc",
+            ]
+        else:
+            cols = ["phase", "amp", "log2fc"]
 
         out_df = pd.DataFrame(out, columns=cols, index=self.index)
 
         if inplace:
-            self.loc[:, "y_mean"] = out_df["y_mean"]
-            self.loc[:, "y_min"] = out_df["y_min"]
-            self.loc[:, "y_max"] = out_df["y_max"]
-            self.loc[:, "amp_abs"] = out_df["amp_abs"]
-            self.loc[:, "phase"] = out_df["phase"]
-            self.loc[:, "amp"] = out_df["amp"]
-            self.loc[:, "log2fc"] = out_df["log2fc"]
+            for col in cols:
+                self.loc[:, col] = out_df[col]
             return
         else:
             return out_df
+
+    def get_cartesian(self, inplace=False):
+        """
+        Method adds columns "a_1" and "b_1" to dataframe.
+        It computes them from columns "amp" and "phase".
+        """
+        self["a_1"] = self["amp"] * np.cos(self["phase"])
+        self["b_1"] = self["amp"] * np.sin(self["phase"])
+        return self if inplace else self[["a_1", "b_1"]].copy()
 
     def kill_amps(self, genes=None, eps=1e-6):
         """
@@ -258,80 +259,6 @@ class Beta(pd.DataFrame):
         # call get_amps such that we kill also the polar amps
         self.get_amp(inplace=True)
 
-    def plot_circular(self, nh, beta2=None, mode="max-min", legend=True):
-        """
-        Make a circular plot for the betas. Use the get_amp function to get the amplitude
-        so that it works for all numbers of harmonics.
-        """
-
-        amp_tmp = self.get_amp(nh=nh)
-        # [y_mean, y_min, y_max, amp_abs, amp_fc, phi_peak]
-        if mode == "max-min":
-            phi = amp_tmp["phi_peak"]
-            r = (amp_tmp["y_max"] - amp_tmp["y_min"]) / 2
-            x = r * np.cos(phi)
-            y = r * np.sin(phi)
-            lim = np.max(r) * 1.1
-
-        elif mode == "rel-amp":
-            phi = amp_tmp["phi_peak"]
-            mean = amp_tmp[:, 0]
-            assert np.all(
-                mean >= 0
-            ), "mean must be positive in plot_circular if mode=rel-amp"
-            r = amp_tmp[:, 3] / amp_tmp[:, 0] / 2
-            x = r * np.cos(phi)
-            y = r * np.sin(phi)
-            lim = np.max(np.log2(amp_tmp[:, 4])) * 1.1
-
-        else:
-            raise ValueError("mode must be either 'max-min' or 'rel-amp'")
-
-        plt.gca().set_aspect("equal")
-        plt.title(mode)
-        for i in range(len(self.index)):
-            plt.plot(x[i], y[i], "o", label=self.index[i])
-        # plot legend outside the plot
-        plt.legend(loc="upper left", bbox_to_anchor=(1, 1)) if legend else None
-        # add vertical and horizontal lines
-        plt.axhline(0, color="gray", lw=0.5)
-        plt.axvline(0, color="gray", lw=0.5)
-
-        plt.gca().set_prop_cycle(None)
-
-        if beta2 is not None:
-            # plot the second beta values using the same colors but different markers
-            # get the beta values
-            amp_tmp2 = beta2.get_amp(nh=nh).values
-            if mode == "max-min":
-                phi2 = amp_tmp2[:, 5]
-                r2 = amp_tmp2[:, 3] / 2  # CAREFUL
-                x2 = r2 * np.cos(phi2)
-                y2 = r2 * np.sin(phi2)
-                lim2 = np.max(r2) * 1.1
-                if lim2 > lim:
-                    lim = lim2
-            elif mode == "rel-amp":
-                phi2 = amp_tmp2[:, 5]
-                mean2 = amp_tmp2[:, 0]
-                assert np.all(
-                    mean2 >= 0
-                ), "mean must be positive in plot_circular if mode=rel-amp"
-                r2 = amp_tmp2[:, 3] / amp_tmp2[:, 0] / 2
-                x2 = r2 * np.cos(phi2)
-                y2 = r2 * np.sin(phi2)
-                lim2 = np.max(np.log2(amp_tmp2[:, 4])) * 1.1
-                if lim2 > lim:
-                    lim = lim2
-            else:
-                raise ValueError("mode must be either 'max-min' or 'rel-amp'")
-            for i in range(len(self.index)):
-                plt.plot(x2[i], y2[i], "x", label=self.index[i])
-        plt.xlim(-lim, lim)
-        plt.ylim(-lim, lim)
-
-        plt.show()
-
     def get_log2fc(self):
         """
         This function converts the amplitudes from log_e
@@ -339,7 +266,7 @@ class Beta(pd.DataFrame):
         """
         pass
 
-    def plot_circular2(
+    def plot_circular(
         self,
         genes_to_plot=None,
         title="",
@@ -347,21 +274,15 @@ class Beta(pd.DataFrame):
         s=20,
         fontisize=12,
         col_names=["log2fc", "phase"],
+        polar_plot_args={},
     ):
         """
-        Takes as input a pandas dataframe with columns "amp_abs", "phphi_peak"
+        Takes as input a pandas dataframe with columns "log2fc", "phase"
         doesn't matter the order of the columns
         """
 
         # polar plot stuff
-        plt.figure(figsize=(10, 10))
-        ax = plt.subplot(111, projection="polar")
-        ax.set_theta_zero_location("N")
-        ax.set_theta_direction(-1)
-        ax.set_rlabel_position(0)
-        ax.set_xticks(np.linspace(0, 2 * np.pi, 24, endpoint=False))
-        ax.set_xticklabels(np.arange(24))
-        ax.set_title(title)
+        ax = polar_plot(title=title, **polar_plot_args)
 
         if genes_to_plot is None:
             genes_to_plot = self.index
@@ -380,6 +301,27 @@ class Beta(pd.DataFrame):
             # annotate
 
             ax.annotate(gene, (phase, amp), fontsize=fontisize)
+
+    def plot_circular2(
+        self,
+        genes_to_plot=None,
+        title="",
+        amp_lim=[0.0, 10.0],
+        s=20,
+        fontisize=12,
+        col_names=["log2fc", "phase"],
+    ):
+        """
+        Wrapper around plot_circular to handle default genes_to_plot.
+        """
+        self.plot_circular(
+            genes_to_plot=genes_to_plot,
+            title=title,
+            amp_lim=amp_lim,
+            s=s,
+            fontisize=fontisize,
+            col_names=col_names,
+        )
 
     def plot_means(self):
         """
@@ -512,6 +454,18 @@ class Beta(pd.DataFrame):
         # Update phi_peak column if present
         if "phase" in self.columns:
             self["phase"] = (self["phase"] + phi) % (2 * np.pi)
+
+    def fix_to_gene(self, gene_name, gene_phase, return_phi=False):
+        """
+        Rotate the beta values so that gene_name has phase gene_phase.
+        """
+        if gene_name not in self.index:
+            raise ValueError(f"gene {gene_name} not in index")
+        current_phase = self.loc[gene_name, "phase"]
+        phi = (gene_phase - current_phase) % (2 * np.pi)
+        self.rotate(phi)
+        if return_phi:
+            return phi
 
     def rescale_amp(self, kappa):
         """
@@ -794,6 +748,7 @@ def plot_beta_shift(
     color1="tab:blue",
     color2="tab:orange",
     line_color="gray",
+    title="Beta comparison",
 ):
     """
     Compare two Beta objects on a polar plot.
@@ -818,6 +773,8 @@ def plot_beta_shift(
         Colors for beta_1 and beta_2 scatter points.
     line_color : str
         Color for connecting lines.
+    title : str
+        Title for the plot.
     """
 
     # Default: plot genes that are in both objects
@@ -831,7 +788,7 @@ def plot_beta_shift(
     ax.set_rlabel_position(0)
     ax.set_xticks(np.linspace(0, 2 * np.pi, 24, endpoint=False))
     ax.set_xticklabels(np.arange(24))
-    ax.set_title("Beta comparison")
+    ax.set_title(title)
 
     for j, gene in enumerate(genes):
         if gene not in beta_1.index or gene not in beta_2.index:

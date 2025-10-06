@@ -171,6 +171,7 @@ def glm_gene_fit(
     pb_replicates=1,
     noise_model="nb",
     show_warnings=False,  # New parameter for the switch
+    add_slope=False,
 ):
     """
     Fits gene expression data to a harmonic model using statsmodels.
@@ -245,8 +246,10 @@ def glm_gene_fit(
         except AttributeError:
             counts = total_counts
 
-    X = create_harmonic_design_matrix(phases.squeeze(), n_harmonics=n_harmonics)
-    X_null = create_harmonic_design_matrix(phases.squeeze(), 0)
+    X = create_harmonic_design_matrix(
+        phases.squeeze(), n_harmonics=n_harmonics, add_slope=add_slope
+    )
+    X_null = create_harmonic_design_matrix(phases.squeeze(), 0, add_slope=add_slope)
 
     # --- Create the "slim" partial function ---
     # Pre-fill all arguments that are the same for every gene
@@ -308,252 +311,9 @@ def glm_gene_fit(
     return params_g
 
 
-# Helper "worker" function to be parallelized for LM (NEW)
-def _fit_single_gene_lm(
-    gene_name, gene_expression, X, X_null, outlier_threshold, n_harmonics
+def create_harmonic_design_matrix(
+    phases, n_harmonics=1, add_intercept=True, add_slope=False
 ):
-    """Fits the OLS for a single gene. To be called by the parallelized main function."""
-    try:
-        # Apply outlier thresholding
-        threshold = np.percentile(gene_expression, outlier_threshold)
-        mask = gene_expression <= threshold
-
-        if mask.sum() == 0:
-            return None  # Skip gene if all values are outliers
-
-        y = gene_expression[mask]
-        X_masked = X[mask]
-        X_null_masked = X_null[mask]
-
-        # Full model
-        mod = sm.OLS(y, X_masked)
-        res = mod.fit()
-        # Null model
-        mod0 = sm.OLS(y, X_null_masked)
-        res0 = mod0.fit()
-
-        # Nested F-test
-        f_stat, p_val, _ = res.compare_f_test(res0)
-        # ΔBIC
-        delta_bic = res.bic - res0.bic
-
-        # Collect params
-        result_dict = {"gene": gene_name}
-        param_values = res.params.to_dict()
-        result_dict.update(param_values)
-        result_dict["BIC"] = delta_bic
-        result_dict["pvalue"] = p_val
-        result_dict["r2"] = res.rsquared
-
-        return result_dict
-
-    except Exception as e:
-        # Build a dictionary with NaNs for failed fits
-        # print(f"Warning: Could not fit model for gene {gene_name}: {str(e)}")
-        result_dict = {"gene": gene_name}
-        for h in range(1, n_harmonics + 1):
-            result_dict[f"a_{h}"] = np.nan
-            result_dict[f"b_{h}"] = np.nan
-        result_dict["a_0"] = np.nan
-        result_dict["pvalue"] = np.nan
-        result_dict["BIC"] = np.nan
-        result_dict["r2"] = np.nan
-        return result_dict
-
-
-# UPDATED FUNCTION
-def lm_gene_fit(
-    data,
-    phases,
-    genes=None,
-    layer=None,
-    n_harmonics=1,
-    outlier_threshold=100.0,  # Default to 100 to include all data
-    n_jobs=-1,
-):
-    """
-    Fits log-transformed gene expression data to a harmonic model using OLS.
-    Parallelized version.
-    """
-    # --- select gene list ---
-    if hasattr(data, "var_names"):
-        all_genes = list(data.var_names)
-    elif isinstance(data, pd.DataFrame):
-        all_genes = data.columns.tolist()
-    else:
-        raise ValueError("For numpy input you must pass genes=list_of_names")
-
-    if genes is None:
-        genes = all_genes
-    else:
-        genes = [g for g in genes if g in all_genes]
-        if not genes:
-            raise ValueError("None of the specified genes found in data")
-
-    # --- extract expression matrix ---
-    if hasattr(data, "layers"):
-        mat = data[:, genes].layers[layer] if layer else data[:, genes].X
-    elif isinstance(data, pd.DataFrame):
-        mat = data[genes].values
-    else:  # numpy array
-        mat = data[:, [all_genes.index(g) for g in genes]]
-
-    # if sparse
-    try:
-        mat = mat.toarray()
-    except AttributeError:
-        pass
-
-    # --- build design matrices ---
-    X = create_harmonic_design_matrix(phases, n_harmonics)
-    X_null = create_harmonic_design_matrix(phases, 0)  # intercept only
-
-    # --- Create the partial function for parallel execution ---
-    fit_function = partial(
-        _fit_single_gene_lm,
-        X=X,
-        X_null=X_null,
-        outlier_threshold=outlier_threshold,
-        n_harmonics=n_harmonics,
-    )
-
-    # --- Dispatch to serial or parallel execution ---
-    if n_jobs == 1:
-        print("Running in serial mode.")
-        results_list = [
-            fit_function(gene_name=genes[i], gene_expression=mat[:, i])
-            for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
-        ]
-    else:
-        print(f"Running in parallel on {n_jobs} jobs.")
-        results_list = Parallel(n_jobs=n_jobs)(
-            delayed(fit_function)(gene_name=genes[i], gene_expression=mat[:, i])
-            for i in tqdm(range(len(genes)), desc="Fitting genes (parallel)")
-        )
-
-    # --- Final cleanup and DataFrame creation ---
-    results_list = [r for r in results_list if r is not None]
-    if not results_list:
-        print("Warning: All gene fits failed.")
-        return pd.DataFrame()
-
-    df = pd.DataFrame(results_list).set_index("gene")
-
-    # BH correction
-    df["pvalue_correctedBH"] = benjamini_hochberg_correction(df["pvalue"].values)
-
-    # Calculate amplitude and phase
-    df = Beta(df)
-    df.get_amp(inplace=True)
-
-    return df
-
-
-# def lm_gene_fit(
-#     data,
-#     phases,
-#     genes=None,
-#     layer=None,
-#     n_harmonics=1,
-# ):
-#     """
-#     Fits log-transformed gene expression data to a harmonic model using OLS.
-
-#     Parameters:
-#     ----------
-#     data : numpy.ndarray, pandas.DataFrame, or AnnData
-#         Log-transformed expression matrix (samples × genes). If DataFrame,
-#         genes should be columns. If AnnData, genes in var_names.
-#     phases : array-like
-#         Phases in radians for each sample (length = n_samples).
-#     genes : list of str, optional
-#         Subset of genes to fit. If None, use all in data.
-#     layer : str, optional
-#         If AnnData, which .layers[layer] to use; else adata.X.
-#     n_harmonics : int, default=1
-#         Number of harmonics to include (cos1/sin1, cos2/sin2, …).
-
-#     Returns:
-#     -------
-#     params_g : pandas.DataFrame
-#         Indexed by gene, with columns:
-#         - a_0       intercept
-#         - a_1, b_1  cos/sin coefficients (and a_2, b_2, … if n_harmonics>1)
-#         - BIC       ΔBIC = BIC_full − BIC_null
-#         - pvalue    from nested F-test
-#         - amp       amplitude = √(a_1² + b_1²) (or max-minus-min/2 for ≥2)
-#         - phase     phase in [0,2π)
-#         - pvalue_correctedBH
-#     """
-
-#     # --- select gene list ---
-#     if hasattr(data, "var_names"):
-#         all_genes = list(data.var_names)
-#     elif isinstance(data, pd.DataFrame):
-#         all_genes = data.columns.tolist()
-#     else:
-#         raise ValueError("For numpy input you must pass genes=list_of_names")
-
-#     if genes is None:
-#         genes = all_genes
-#     else:
-#         genes = [g for g in genes if g in all_genes]
-#         if not genes:
-#             raise ValueError("None of the specified genes found in data")
-
-#     # --- extract expression matrix ---
-#     if hasattr(data, "layers"):
-#         mat = data[:, genes].layers[layer] if layer else data[:, genes].X
-#     elif isinstance(data, pd.DataFrame):
-#         mat = data[genes].values
-#     else:  # numpy array
-#         mat = data[:, [all_genes.index(g) for g in genes]]
-
-#     # if sparse
-#     try:
-#         mat = mat.toarray()
-#     except AttributeError:
-#         pass
-
-#     # --- build design matrices ---
-#     X = create_harmonic_design_matrix(phases, n_harmonics)
-#     X_null = create_harmonic_design_matrix(phases, 0)  # intercept only
-
-#     results = []
-#     for i, gene in enumerate(genes):
-#         y = mat[:, i]
-#         # full model
-#         mod = sm.OLS(y, X)
-#         res = mod.fit()
-#         # null model
-#         mod0 = sm.OLS(y, X_null)
-#         res0 = mod0.fit()
-#         # nested F-test
-#         f_stat, p_val, _ = res.compare_f_test(res0)
-#         # ΔBIC
-#         delta_bic = res.bic - res0.bic
-#         # collect params
-#         d = {"gene": gene}
-#         param_values = res.params.to_dict()
-#         for k, v in param_values.items():
-#             d[k] = v
-
-#         d["BIC"] = delta_bic
-#         d["pvalue"] = p_val
-#         d["r2"] = res.rsquared
-
-#         results.append(d)
-
-#     df = pd.DataFrame(results).set_index("gene")
-#     df = Beta(df)
-#     df.get_amp(inplace=True)
-
-#     # BH correction
-#     df["pvalue_correctedBH"] = benjamini_hochberg_correction(df["pvalue"].values)
-#     return Beta(df)
-
-
-def create_harmonic_design_matrix(phases, n_harmonics=1, add_intercept=True):
     """
     Constructs a design matrix for harmonic regression with multiple harmonics,
     with columns ordered as: intercept (a_0), a_1, b_1, a_2, b_2, ..., a_n, b_n.
@@ -582,6 +342,9 @@ def create_harmonic_design_matrix(phases, n_harmonics=1, add_intercept=True):
     for h in range(1, n_harmonics + 1):
         cols[f"a_{h}"] = np.cos(h * phases)
         cols[f"b_{h}"] = np.sin(h * phases)
+
+    if add_slope:
+        cols["slope"] = phases
 
     X_df = pd.DataFrame(cols)
     return X_df
