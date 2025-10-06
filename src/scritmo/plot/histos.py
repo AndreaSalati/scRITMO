@@ -11,7 +11,6 @@ from scritmo.basics import w, rh, ind2
 import matplotlib.gridspec as gridspec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from adjustText import adjust_text
-from scritmo.beta import Beta
 
 import seaborn as sns
 from scipy.stats import vonmises

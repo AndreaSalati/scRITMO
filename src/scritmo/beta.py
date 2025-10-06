@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import re
 from adjustText import adjust_text
+from .plot.utils import polar_plot
 
 
 class Beta(pd.DataFrame):
@@ -228,6 +229,15 @@ class Beta(pd.DataFrame):
         else:
             return out_df
 
+    def get_cartesian(self, inplace=False):
+        """
+        Method adds columns "a_1" and "b_1" to dataframe.
+        It computes them from columns "amp" and "phase".
+        """
+        self["a_1"] = self["amp"] * np.cos(self["phase"])
+        self["b_1"] = self["amp"] * np.sin(self["phase"])
+        return self if inplace else self[["a_1", "b_1"]].copy()
+
     def kill_amps(self, genes=None, eps=1e-6):
         """
         This command zeros out all haronics except the
@@ -264,6 +274,7 @@ class Beta(pd.DataFrame):
         s=20,
         fontisize=12,
         col_names=["log2fc", "phase"],
+        polar_plot_args={},
     ):
         """
         Takes as input a pandas dataframe with columns "log2fc", "phase"
@@ -271,14 +282,7 @@ class Beta(pd.DataFrame):
         """
 
         # polar plot stuff
-        plt.figure(figsize=(10, 10))
-        ax = plt.subplot(111, projection="polar")
-        ax.set_theta_zero_location("N")
-        ax.set_theta_direction(-1)
-        ax.set_rlabel_position(0)
-        ax.set_xticks(np.linspace(0, 2 * np.pi, 24, endpoint=False))
-        ax.set_xticklabels(np.arange(24))
-        ax.set_title(title)
+        ax = polar_plot(title=title, **polar_plot_args)
 
         if genes_to_plot is None:
             genes_to_plot = self.index
@@ -744,6 +748,7 @@ def plot_beta_shift(
     color1="tab:blue",
     color2="tab:orange",
     line_color="gray",
+    title="Beta comparison",
 ):
     """
     Compare two Beta objects on a polar plot.
@@ -768,6 +773,8 @@ def plot_beta_shift(
         Colors for beta_1 and beta_2 scatter points.
     line_color : str
         Color for connecting lines.
+    title : str
+        Title for the plot.
     """
 
     # Default: plot genes that are in both objects
@@ -781,7 +788,7 @@ def plot_beta_shift(
     ax.set_rlabel_position(0)
     ax.set_xticks(np.linspace(0, 2 * np.pi, 24, endpoint=False))
     ax.set_xticklabels(np.arange(24))
-    ax.set_title("Beta comparison")
+    ax.set_title(title)
 
     for j, gene in enumerate(genes):
         if gene not in beta_1.index or gene not in beta_2.index:

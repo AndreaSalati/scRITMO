@@ -6,7 +6,6 @@ from scritmo.basics import w, rh, ind2
 import matplotlib.gridspec as gridspec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from adjustText import adjust_text
-from scritmo.beta import Beta
 
 import seaborn as sns
 from scipy.stats import vonmises
@@ -30,6 +29,7 @@ def polar_plot(
     theta_min=0,
     theta_max=2 * np.pi,
     aperture=None,
+    n_phase_ticks=24,
 ):
     """
     This function returns the ax object that can be used to plot the polar plot
@@ -61,8 +61,9 @@ def polar_plot(
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
     ax.set_rlabel_position(0)
-    ax.set_xticks(np.linspace(0, 2 * np.pi, 24, endpoint=False))
-    ax.set_xticklabels(np.arange(24))
+    ax.set_xticks(np.linspace(0, 2 * np.pi, n_phase_ticks, endpoint=False))
+    x_ticks_labels = [f"{int(i * 24 / n_phase_ticks)}h" for i in range(n_phase_ticks)]
+    ax.set_xticklabels(x_ticks_labels)
     ax.set_title(title)
     ax.set_rorigin(inner_ring_size)
     if not show_rlabels:
@@ -155,7 +156,7 @@ def paper_style():
             "legend.fontsize": 14,  # Legend font size
             "legend.title_fontsize": 16,  # Legend title font size
             # 'font.family': 'serif',              # Font family (you can change this to 'sans-serif' or 'monospace')
-            # 'font.serif': ['Times New Roman'],   # Font choice, adjust to your needs
+            "font.serif": ["Arial"],  # Font choice, adjust to your needs
             "axes.linewidth": 1.5,  # Width of the axis lines
             "lines.linewidth": 2.0,  # Line width for plots
             "axes.spines.top": False,  # Disable top spine

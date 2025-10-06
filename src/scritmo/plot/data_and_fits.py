@@ -228,7 +228,7 @@ def plot_circadian_data_and_fit(
         phi_x * rh,
         y,
         c=line_color,
-        label="GLM fit",
+        label="Fit",
     )
 
     # Update legend since we've added a new line
