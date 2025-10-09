@@ -743,12 +743,13 @@ def plot_beta_shift(
     amp_lim=[0.0, 10.0],
     s=40,
     fontsize=10,
-    col_names=["amp", "phase"],
+    col_names=["log2fc", "phase"],
     labels=["beta1", "beta2"],
     color1="tab:blue",
     color2="tab:orange",
     line_color="gray",
     title="Beta comparison",
+    polar_plot_args=None,
 ):
     """
     Compare two Beta objects on a polar plot.
@@ -775,20 +776,18 @@ def plot_beta_shift(
         Color for connecting lines.
     title : str
         Title for the plot.
+    polar_plot_args : dict or None
+        Additional keyword arguments to pass to polar_plot.
     """
+
+    if polar_plot_args is None:
+        polar_plot_args = {}
 
     # Default: plot genes that are in both objects
     if genes is None:
         genes = list(set(beta_1.index).intersection(beta_2.index))
 
-    plt.figure(figsize=(10, 10))
-    ax = plt.subplot(111, projection="polar")
-    ax.set_theta_zero_location("N")
-    ax.set_theta_direction(-1)
-    ax.set_rlabel_position(0)
-    ax.set_xticks(np.linspace(0, 2 * np.pi, 24, endpoint=False))
-    ax.set_xticklabels(np.arange(24))
-    ax.set_title(title)
+    ax = polar_plot(title=title, **polar_plot_args)
 
     for j, gene in enumerate(genes):
         if gene not in beta_1.index or gene not in beta_2.index:
@@ -812,4 +811,3 @@ def plot_beta_shift(
         ax.annotate(gene, (phase2, amp2), fontsize=fontsize)
 
     ax.legend(loc="upper right")
-    plt.show()

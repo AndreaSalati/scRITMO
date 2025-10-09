@@ -18,8 +18,20 @@ from .utils import polar_plot
 import numpy as np
 
 
-def hist(x, bins=30):
-    _, _, _ = plt.hist(x, bins=bins)
+def hist(x, bins=30, normalize=False):
+    """
+    Plot a histogram of x.
+
+    Parameters
+    ----------
+    x : array-like
+        Input data.
+    bins : int
+        Number of bins.
+    normalize : bool
+        If True, normalize the histogram (density=True).
+    """
+    _, _, _ = plt.hist(x, bins=bins, density=normalize)
     plt.show()
     return
 
@@ -32,17 +44,39 @@ def phist(
     color=None,
     show_rlabels=True,
     show_grid=True,
+    normalize=False,
 ):
-    """Quick polar histogram"""
+    """
+    Quick polar histogram.
+
+    Parameters
+    ----------
+    x : array-like
+        Input data (angles in radians).
+    bins : int
+        Number of bins.
+    title : str
+        Plot title.
+    inner_ring_size : float
+        Inner ring size for polar_plot.
+    color : color
+        Histogram color.
+    show_rlabels : bool
+        Show radial labels.
+    show_grid : bool
+        Show grid.
+    normalize : bool
+        If True, normalize the histogram (density=True).
+    """
     polar_plot(
         title=title,
         inner_ring_size=inner_ring_size,
         show_rlabels=show_rlabels,
         show_grid=show_grid,
     )
-    _, _, _ = plt.hist(x, bins=bins, color=color)
-    plt.show()
-    return
+    _, _, _ = plt.hist(x, bins=bins, color=color, density=normalize)
+    ax, fig = plt.gca(), plt.gcf()
+    return ax, fig
 
 
 def plot_stacked_polar(

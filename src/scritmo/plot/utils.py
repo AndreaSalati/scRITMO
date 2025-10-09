@@ -29,7 +29,7 @@ def polar_plot(
     theta_min=0,
     theta_max=2 * np.pi,
     aperture=None,
-    n_phase_ticks=24,
+    n_phase_ticks=6,
 ):
     """
     This function returns the ax object that can be used to plot the polar plot
