@@ -742,6 +742,7 @@ def plot_beta_shift(
     genes=None,
     amp_lim=[0.0, 10.0],
     s=40,
+    alpha=1,
     fontsize=10,
     col_names=["log2fc", "phase"],
     labels=["beta1", "beta2"],
@@ -801,8 +802,22 @@ def plot_beta_shift(
             continue
 
         # Scatter points (add label only once for legend)
-        ax.scatter(phase1, amp1, s=s, color=color1, label=labels[0] if j == 0 else "")
-        ax.scatter(phase2, amp2, s=s, color=color2, label=labels[1] if j == 0 else "")
+        ax.scatter(
+            phase1,
+            amp1,
+            s=s,
+            color=color1,
+            alpha=alpha,
+            label=labels[0] if j == 0 else "",
+        )
+        ax.scatter(
+            phase2,
+            amp2,
+            s=s,
+            color=color2,
+            alpha=alpha,
+            label=labels[1] if j == 0 else "",
+        )
 
         # Line between them
         ax.plot([phase1, phase2], [amp1, amp2], color=line_color, alpha=0.6)
