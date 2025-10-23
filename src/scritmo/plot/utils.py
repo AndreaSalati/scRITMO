@@ -30,6 +30,7 @@ def polar_plot(
     theta_max=2 * np.pi,
     aperture=None,
     n_phase_ticks=6,
+    xtick_fontsize=20,
 ):
     """
     This function returns the ax object that can be used to plot the polar plot
@@ -51,6 +52,10 @@ def polar_plot(
         Maximum angle (in radians) to display. Default is 2π.
     aperture : float, optional
         If provided, sets theta_min = -aperture/2 and theta_max = aperture/2.
+    n_phase_ticks : int, optional
+        Number of angular tick labels. Default is 6.
+    xtick_fontsize : int or float, optional
+        Font size for the angular tick labels (e.g., "0h", "6h"). Default is 10.
     """
     if aperture is not None:
         theta_min = -aperture / 2
@@ -61,9 +66,14 @@ def polar_plot(
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
     ax.set_rlabel_position(0)
+
+    # Set tick positions
     ax.set_xticks(np.linspace(0, 2 * np.pi, n_phase_ticks, endpoint=False))
+    # Create labels
     x_ticks_labels = [f"{int(i * 24 / n_phase_ticks)}h" for i in range(n_phase_ticks)]
-    ax.set_xticklabels(x_ticks_labels)
+    # Set labels with specified fontsize
+    ax.set_xticklabels(x_ticks_labels, fontsize=xtick_fontsize)
+
     ax.set_title(title)
     ax.set_rorigin(inner_ring_size)
     if not show_rlabels:

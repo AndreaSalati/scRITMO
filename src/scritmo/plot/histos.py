@@ -153,154 +153,6 @@ def plot_stacked_polar(
     return ax
 
 
-# def plot_phase_polar_population(
-#     phases,
-#     time,
-#     amplitude=None,
-#     plot_type="histogram",
-#     cmap_name="twilight",
-#     bins=30,
-#     ylim=None,
-#     color_order="linear",
-#     inner_ring_size=0.0,
-#     title="",
-#     show_rlabels=True,
-#     show_grid=True,
-#     hist_density=True,
-# ):
-#     """
-#     Plot phase population on a polar plot using polar_plot for consistent styling.
-
-#     Parameters
-#     ----------
-#     phases : array-like
-#         Phase angles (radians).
-#     time : array-like
-#         Time points (same length as phases).
-#     amplitude : array-like, optional
-#         Amplitude values for scatter plot.
-#     plot_type : str
-#         "histogram", "scatter", or "density".
-#     cmap_name : str
-#         Colormap name.
-#     bins : int
-#         Number of bins for histogram.
-#     ylim : float, optional
-#         Y-axis limit for scatter plot.
-#     color_order : str
-#         "linear" or "high_contrast".
-#     inner_ring_size : float
-#         Passed to polar_plot.
-#     title : str
-#         Plot title.
-#     show_rlabels : bool
-#         Show radial labels.
-#     show_grid : bool
-#         Show grid.
-#     """
-#     import matplotlib.pyplot as plt
-
-#     # Prepare data
-#     phases = np.asarray(phases)
-#     time = np.asarray(time)
-#     if amplitude is not None:
-#         amplitude = np.asarray(amplitude)
-
-#     unique_times = np.unique(time)
-#     cmap = plt.get_cmap(cmap_name)
-
-#     # Set up polar axes using polar_plot
-#     ax = polar_plot(
-#         title=title,
-#         inner_ring_size=inner_ring_size,
-#         show_rlabels=show_rlabels,
-#         show_grid=show_grid,
-#     )
-#     fig = ax.figure
-
-#     # Color selection
-#     if color_order == "linear":
-#         base_colors = cmap(np.linspace(0, 1, len(unique_times), endpoint=False))
-#     else:
-#         # fallback: just use linear if no get_high_contrast_colors
-#         base_colors = cmap(np.linspace(0, 1, len(unique_times), endpoint=False))
-
-#     theta_vals = np.linspace(0, 2 * np.pi, 200, endpoint=False)
-
-#     for i, t in enumerate(unique_times):
-#         color = base_colors[i]
-#         theta_ref = 2 * np.pi * (t % 24) / 24
-
-#         mask = time == t
-#         ph = phases[mask]
-#         if amplitude is not None:
-#             amps = amplitude[mask]
-
-#         if plot_type == "density":
-#             # If you have a sample grouping, add here
-#             if "samples" in locals():
-#                 samples = np.asarray(samples)
-#                 for j, sam in enumerate(np.unique(samples[mask])):
-#                     ph_s = ph[samples[mask] == sam]
-#                     if len(ph_s) > 1:
-#                         kappa, loc, scale = vonmises.fit(ph_s, method="analytical")
-#                         dens = vonmises.pdf(theta_vals, kappa, loc=loc, scale=scale)
-#                         ax.fill_between(theta_vals, 0, dens, color=color, alpha=0.3)
-#                         ax.plot(theta_vals, dens, color=color, alpha=0.7)
-#                     else:
-#                         ax.plot(ph_s, [0.1], "o", color=color, alpha=0.9, markersize=4)
-#             else:
-#                 if len(ph) > 1:
-#                     kappa, loc, scale = vonmises.fit(ph, method="analytical")
-#                     dens = vonmises.pdf(theta_vals, kappa, loc=loc, scale=scale)
-#                     ax.fill_between(theta_vals, 0, dens, color=color, alpha=0.3)
-#                     ax.plot(theta_vals, dens, color=color, alpha=0.7)
-#                 else:
-#                     ax.plot(ph, [0.1], "o", color=color, alpha=0.9, markersize=4)
-
-#         elif plot_type == "scatter" and amplitude is not None:
-#             ax.scatter(
-#                 ph,
-#                 amps,
-#                 s=10,
-#                 color=color,
-#                 alpha=0.5,
-#                 edgecolors="none",
-#             )
-#             if ylim is not None:
-#                 ax.set_ylim(0, ylim)
-#         elif plot_type == "histogram":
-#             ax.hist(
-#                 ph,
-#                 bins=bins,
-#                 density=hist_density,
-#                 alpha=0.5,
-#                 color=color,
-#                 label=f"{t:.0f}h",
-#                 range=(0, 2 * np.pi),
-#             )
-
-#     rmax = ax.get_rmax()
-#     for i, t in enumerate(unique_times):
-#         color = base_colors[i]
-#         theta_ref = 2 * np.pi * (t % 24) / 24
-#         ax.plot(
-#             [theta_ref, theta_ref],
-#             [0, rmax],
-#             linestyle="--",
-#             color=color,
-#             linewidth=1.5,
-#         )
-
-#     ax.set_title(
-#         f"{title or 'Phase Population'} – {plot_type.capitalize()} Plot", va="bottom"
-#     )
-#     if plot_type == "histogram":
-#         ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
-#     fig.tight_layout()
-#     return fig, ax
-
-
 def plot_phase_polar_population(
     phases,
     time,
@@ -314,8 +166,9 @@ def plot_phase_polar_population(
     title="",
     show_rlabels=True,
     show_grid=True,
-    hist_density=True,
+    hist_density=False,
     scatter_s=10,
+    show_legend=True,
 ):
     """
     Plot phase population on a polar plot, with adaptive inner ring for histograms.
@@ -348,6 +201,10 @@ def plot_phase_polar_population(
         Whether to show the plot grid.
     hist_density : bool
         If True, the histogram is normalized to form a probability density.
+    scatter_s : int
+        Marker size for scatter plot.
+    show_legend : bool
+        Whether to show legend for histogram plot.
     """
     # Prepare data
     phases = np.asarray(phases)
@@ -459,6 +316,79 @@ def plot_phase_polar_population(
 
     ax.set_title(f"{title or 'Phase Population'}", va="bottom")
     if plot_type == "histogram":
-        ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
+        if show_legend:
+            ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
+    fig.tight_layout()
+    return fig, ax
+
+
+def plot_polar_histogram(
+    phases,
+    color="C0",
+    bins=30,
+    inner_ring_size=0.0,
+    title="",
+    show_rlabels=True,
+    show_grid=True,
+    hist_density=False,
+    alpha=0.6,
+):
+    """
+    Plot a single phase population histogram on a polar plot.
+
+    Parameters
+    ----------
+    phases : array-like
+        Phase angles in radians.
+    color : str or tuple
+        Color for the histogram.
+    bins : int
+        Number of bins for the histogram.
+    inner_ring_size : float
+        A proportion (e.g., 0.2) of the max bin height to create
+        a central empty space.
+    title : str
+        Plot title.
+    show_rlabels : bool
+        Whether to show radial labels.
+    show_grid : bool
+        Whether to show the plot grid.
+    hist_density : bool
+        If True, the histogram is normalized.
+    """
+    # Prepare data
+    phases = np.asarray(phases)
+
+    # --- Adaptive Origin Calculation ---
+    # Pre-compute histogram to find max bin height
+    counts, _ = np.histogram(
+        phases, bins=bins, density=hist_density, range=(0, 2 * np.pi)
+    )
+    max_bin_height = np.max(counts)
+
+    # Calculate rorigin as a negative proportion of the max height
+    rorigin_value = -inner_ring_size * max_bin_height
+
+    # --- Plot Setup ---
+    ax = polar_plot(
+        title=title,
+        inner_ring_size=rorigin_value,
+        show_rlabels=show_rlabels,
+        show_grid=show_grid,
+    )
+    fig = ax.figure
+
+    # --- Plotting ---
+    ax.hist(
+        phases,
+        bins=bins,
+        density=hist_density,
+        alpha=alpha,  # Slightly adjusted alpha for better single-color view
+        color=color,
+        range=(0, 2 * np.pi),
+    )
+
+    # --- Final Touches ---
+    ax.set_title(f"{title or 'Phase Population'}", va="bottom")
     fig.tight_layout()
     return fig, ax
