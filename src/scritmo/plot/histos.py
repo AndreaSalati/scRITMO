@@ -32,8 +32,10 @@ def hist(x, bins=30, normalize=False):
         If True, normalize the histogram (density=True).
     """
     _, _, _ = plt.hist(x, bins=bins, density=normalize)
-    plt.show()
-    return
+    ax = plt.gca()
+    fig = plt.gcf()
+    # plt.show()
+    return ax, fig
 
 
 def phist(

@@ -28,6 +28,32 @@ hccg = np.unique(
     )
 )
 
+hccg_extended = np.unique(
+    np.array(
+        [
+            "ARNTL",
+            "BHLHE40",
+            "BHLHE41",
+            "BMAL1",
+            "CIART",
+            "CLOCK",
+            "CRY1",
+            "CRY2",
+            "CSNK1D",
+            "CSNK1E",
+            "DBP",
+            "HLF",
+            "NPAS2",
+            "NR1D1",
+            "NR1D2",
+            "PER1",
+            "PER2",
+            "PER3",
+            "RORC",
+            "TEF",
+        ]
+    )
+)
 
 droin_selected = np.array(
     [
