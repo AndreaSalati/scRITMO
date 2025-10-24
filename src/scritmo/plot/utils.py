@@ -21,6 +21,71 @@ def xy(color="red", linestyle="--", legend_label=""):
     )
 
 
+# def polar_plot(
+#     title="",
+#     inner_ring_size=0,
+#     show_rlabels=True,
+#     show_grid=True,
+#     theta_min=0,
+#     theta_max=2 * np.pi,
+#     aperture=None,
+#     n_phase_ticks=6,
+#     xtick_fontsize=20,
+# ):
+#     """
+#     This function returns the ax object that can be used to plot the polar plot
+#     or histogram.
+
+#     Parameters
+#     ----------
+#     title : str
+#         The title of the plot.
+#     inner_ring_size : float
+#         The size of the inner ring, negative number is suggested.
+#     show_rlabels : bool, optional
+#         If False, removes radial axis labels (numbers). Default is True.
+#     show_grid : bool, optional
+#         If False, removes polar grid lines. Default is True.
+#     theta_min : float, optional
+#         Minimum angle (in radians) to display. Default is 0.
+#     theta_max : float, optional
+#         Maximum angle (in radians) to display. Default is 2π.
+#     aperture : float, optional
+#         If provided, sets theta_min = -aperture/2 and theta_max = aperture/2.
+#     n_phase_ticks : int, optional
+#         Number of angular tick labels. Default is 6.
+#     xtick_fontsize : int or float, optional
+#         Font size for the angular tick labels (e.g., "0h", "6h"). Default is 10.
+#     """
+#     if aperture is not None:
+#         theta_min = -aperture / 2
+#         theta_max = aperture / 2
+
+#     plt.figure(figsize=(10, 10))
+#     ax = plt.subplot(111, projection="polar")
+#     ax.set_theta_zero_location("N")
+#     ax.set_theta_direction(-1)
+#     ax.set_rlabel_position(0)
+
+#     # Set tick positions
+#     ax.set_xticks(np.linspace(0, 2 * np.pi, n_phase_ticks, endpoint=False))
+#     # Create labels
+#     x_ticks_labels = [f"{int(i * 24 / n_phase_ticks)}h" for i in range(n_phase_ticks)]
+#     # Set labels with specified fontsize
+#     ax.set_xticklabels(x_ticks_labels, fontsize=xtick_fontsize)
+
+#     ax.set_title(title)
+#     ax.set_rorigin(inner_ring_size)
+#     if not show_rlabels:
+#         ax.set_yticklabels([])
+#     if not show_grid:
+#         ax.grid(False)
+#     # Set the angular span
+#     ax.set_thetamin(np.degrees(theta_min))
+#     ax.set_thetamax(np.degrees(theta_max))
+#     return ax
+
+
 def polar_plot(
     title="",
     inner_ring_size=0,
@@ -31,10 +96,12 @@ def polar_plot(
     aperture=None,
     n_phase_ticks=6,
     xtick_fontsize=20,
+    ax=None,
 ):
     """
-    This function returns the ax object that can be used to plot the polar plot
-    or histogram.
+    This function configures and returns a polar ax object.
+    If 'ax' is provided, it configures that axis.
+    If 'ax' is None, it creates a new figure and polar axis.
 
     Parameters
     ----------
@@ -56,13 +123,22 @@ def polar_plot(
         Number of angular tick labels. Default is 6.
     xtick_fontsize : int or float, optional
         Font size for the angular tick labels (e.g., "0h", "6h"). Default is 10.
+    ax : matplotlib.axes.Axes, optional
+        An existing polar axes object to configure. Must have
+        projection='polar'. If None, a new figure and axes are created.
     """
     if aperture is not None:
         theta_min = -aperture / 2
         theta_max = aperture / 2
 
-    plt.figure(figsize=(10, 10))
-    ax = plt.subplot(111, projection="polar")
+    # --- This is the key change ---
+    # If no axis is provided, create a new one
+    if ax is None:
+        plt.figure(figsize=(10, 10))
+        ax = plt.subplot(111, projection="polar")
+    # ------------------------------
+
+    # The rest of the function operates on 'ax' as before
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
     ax.set_rlabel_position(0)
@@ -83,6 +159,7 @@ def polar_plot(
     # Set the angular span
     ax.set_thetamin(np.degrees(theta_min))
     ax.set_thetamax(np.degrees(theta_max))
+
     return ax
 
 

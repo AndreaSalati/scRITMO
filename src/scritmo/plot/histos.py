@@ -47,6 +47,7 @@ def phist(
     show_rlabels=True,
     show_grid=True,
     normalize=False,
+    ax=None,
 ):
     """
     Quick polar histogram.
@@ -75,10 +76,11 @@ def phist(
         inner_ring_size=inner_ring_size,
         show_rlabels=show_rlabels,
         show_grid=show_grid,
+        ax=ax,
     )
-    _, _, _ = plt.hist(x, bins=bins, color=color, density=normalize)
-    ax, fig = plt.gca(), plt.gcf()
-    return ax, fig
+    ax.hist(x, bins=bins, color=color, density=normalize)
+
+    return ax, ax.figure
 
 
 def plot_stacked_polar(
