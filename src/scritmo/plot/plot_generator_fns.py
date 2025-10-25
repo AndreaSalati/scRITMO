@@ -21,6 +21,7 @@ def amp_inflation_plot(
     annotate_names=False,
     show_marginals=True,
     max_val=4.0,
+    add_kde=True,
 ):
     """
     Creates a jointplot with options to annotate genes and hide marginal plots.
@@ -57,7 +58,8 @@ def amp_inflation_plot(
             g.ax_joint.text(x_coord + 0.05, y_coord, gene, fontsize=8)
 
     # Add the KDE plot and a diagonal line
-    g.plot_joint(sns.kdeplot, color="r", zorder=1, levels=6, alpha=1)
+    if add_kde:
+        g.plot_joint(sns.kdeplot, color="r", zorder=1, levels=6, alpha=1)
     g.ax_joint.axline((0, 0), slope=1, ls="--", c=".3", label="y=x")
 
     # --- Hide Marginal Plots ---

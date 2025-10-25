@@ -626,6 +626,24 @@ class Beta(pd.DataFrame):
         plt.tight_layout()
         plt.show()
 
+    def quick_filtering(self, min_log2fc=0.8, min_amp=-13, min_pval=0.05):
+        """
+        Quick filtering of genes based on log2fc, amplitude, and p-value.
+        Returns a filtered Beta object.
+        """
+        mask = np.ones(len(self), dtype=bool)
+
+        if "log2fc" in self.columns:
+            mask &= self["log2fc"] >= min_log2fc
+
+        if "amp" in self.columns:
+            mask &= self["amp"] >= min_amp
+
+        if "pvalue_correctedBH" in self.columns:
+            mask &= self["pvalue_correctedBH"] <= min_pval
+
+        return self.loc[mask].copy()
+
     # def sort_data_metadata(self):
     #     """
     #     Reorder columns in place so that:
