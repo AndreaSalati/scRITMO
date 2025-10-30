@@ -71,13 +71,14 @@ def phist(
     normalize : bool
         If True, normalize the histogram (density=True).
     """
-    polar_plot(
-        title=title,
-        inner_ring_size=inner_ring_size,
-        show_rlabels=show_rlabels,
-        show_grid=show_grid,
-        ax=ax,
-    )
+    if ax is None:
+        ax = polar_plot(
+            title=title,
+            inner_ring_size=inner_ring_size,
+            show_rlabels=show_rlabels,
+            show_grid=show_grid,
+            ax=ax,
+        )
     ax.hist(x, bins=bins, color=color, density=normalize)
 
     return ax, ax.figure
