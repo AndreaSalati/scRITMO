@@ -12,12 +12,24 @@ import seaborn as sns
 from scipy.stats import vonmises
 
 
-def polar_plot_shifts(title: str = "", inner_ring_size: float = 0, angle: float = None):
+def polar_plot_shifts(
+    title: str = "",
+    inner_ring_size: float = 0,
+    angle: float = None,
+    show_radial_grid: bool = True,  # Replaces show_grid
+    show_angular_grid: bool = True,  # Replaces show_grid
+    show_rlabels: bool = True,
+    xtick_fontsize: float = 10,
+    ax=None,
+):
     """
     Returns a polar-Axes in which the 24 hour‐ticks are labeled by their
     signed offsets from “midnight” (θ=0), and—if 'angle' is given—we only
     display the wedge θ ∈ [−angle/2, +angle/2].  The radial‐grid labels
     are placed on the LEFT boundary of that wedge.
+
+    This version is based on the original function, with added parameters
+    for grid/label visibility and font size.
 
     Parameters
     ----------
@@ -25,40 +37,41 @@ def polar_plot_shifts(title: str = "", inner_ring_size: float = 0, angle: float 
         The title string to put on top of the plot.
     inner_ring_size : float, optional
         If negative, the “zero radius” circle is pushed inward by that amount.
-        (In other words, r=0 is actually at radius == inner_ring_size < 0.)
     angle : float or None, optional
         The TOTAL angular span (in radians) you want to see, *centered* on θ=0.
-        - If None, we show the full circle (no theta‐clipping).
-        - If angle = π/2, we show only θ ∈ [−π/4, +π/4], i.e. ±3 h.
-        - If angle = π, we show only θ ∈ [−π/2, +π/2], i.e. ±6 h.
+    show_radial_grid : bool, optional
+        If False, removes radial grid lines. Default is True.
+    show_angular_grid : bool, optional
+        If False, removes angular grid lines. Default is True.
+    show_rlabels : bool, optional
+        If False, removes radial axis labels (numbers). Default is True.
+    xtick_fontsize : int or float, optional
+        Font size for the angular tick labels (e.g., "-6", "0", "+6"). Default is 10.
+    ax : matplotlib.axes.Axes, optional
+        An existing polar axes object to configure. Must have
+        projection='polar'. If None, a new figure and axes are created.
 
     Returns
     -------
     ax : matplotlib.axes._subplots.PolarAxesSubplot
         A polar‐projection Axes on which you can now call .plot(…) or .bar(…), etc.
     """
-    plt.figure(figsize=(10, 10))
-    ax = plt.subplot(111, projection="polar")
+    # If no axis is provided, create a new one
+    if ax is None:
+        plt.figure(figsize=(10, 10))
+        ax = plt.subplot(111, projection="polar")
 
     # 1) Put θ=0 at North, and make positive θ go *clockwise*:
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
 
     # 2) Compute the 24 “signed” angles in [−π, +π]:
-    #
-    #    For each hour h = 0..23, the usual angle is
-    #       θ_h = (h / 24) * 2π   ∈ [0, 2π).
-    #    We shift into [−π, +π] by:
-    #       signed_angle_h = (θ_h + π) mod 2π  − π.
-    #    That way, h=1 sits at +2π/24, h=23 sits at −2π/24, etc.
     angles_abs = np.linspace(0, 2 * np.pi, 24, endpoint=False)
     signed_angles = (angles_abs + np.pi) % (2 * np.pi) - np.pi
 
-    # 3) Compute the signed‐hour label for each angle,
-    #    rounding to the nearest integer instead of truncating:
+    # 3) Compute the signed‐hour label for each angle:
     raw_values = signed_angles * (24.0 / (2 * np.pi))
     signed_hours = np.round(raw_values).astype(int)
-    # (Optional) If you’d prefer “+12” instead of “−12” at exactly θ=±π, you can do:
     signed_hours[signed_hours == -12] = 12
 
     # 4) Sort by signed_angles so ticks go in increasing order from −π to +π:
@@ -68,10 +81,11 @@ def polar_plot_shifts(title: str = "", inner_ring_size: float = 0, angle: float 
 
     # 5) Place those 24 ticks at the “signed” angles, labeling them by signed_hours:
     ax.set_xticks(sorted_signed_angles)
-    ax.set_xticklabels(sorted_labels)
+    ax.set_xticklabels(sorted_labels, fontsize=xtick_fontsize)  # Added fontsize
 
     # 6) Add title & “inner ring”:
-    ax.set_title(title)
+    #    (Scaled title fontsize based on xtick_fontsize)
+    ax.set_title(title, fontsize=xtick_fontsize * 1.2)
     ax.set_rorigin(inner_ring_size)
 
     # 7) If the user requested a finite wedge (angle != None):
@@ -89,7 +103,14 @@ def polar_plot_shifts(title: str = "", inner_ring_size: float = 0, angle: float 
         # Full circle & r‐labels straight up at θ=0°:
         ax.set_rlabel_position(0)
 
-    ax.grid(True)
+    # 8) Apply visibility settings
+    if not show_rlabels:
+        ax.set_yticklabels([])
+
+    # Apply grid visibility separately
+    ax.yaxis.grid(show_radial_grid)  # Radial lines
+    ax.xaxis.grid(show_angular_grid)  # Angular lines
+
     return ax
 
 
