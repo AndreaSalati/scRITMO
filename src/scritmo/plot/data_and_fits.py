@@ -59,6 +59,7 @@ def plot_circadian_data(
     s=1,
     log_bin_y=False,
     jitter=0.0,
+    c=None,
 ):
     """
     Plot expression values of a gene over circadian phase.
@@ -144,6 +145,7 @@ def plot_circadian_data(
             s=s,
             label="data",
             alpha=alpha,
+            c=c,
         )
 
     # Plot details
@@ -170,6 +172,7 @@ def plot_circadian_data_and_fit(
     columns_names=["amp", "phase", "a_0"],
     s=10,
     jitter=0.0,
+    c=None,
 ):
     """
     Creates a plot of circadian expression data and GLM fit, returning an axis object.
@@ -206,6 +209,7 @@ def plot_circadian_data_and_fit(
         log_bin_y=log_bin_y,
         s=s,
         jitter=jitter,
+        c=c,
     )
 
     # Now add the GLM fit
