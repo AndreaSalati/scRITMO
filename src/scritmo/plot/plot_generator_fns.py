@@ -208,8 +208,10 @@ def plot_dual_loss(loss_epochs, mad_epochs, title="Training Metrics Over Epochs"
 
     # Plot the MAD on the right y-axis
     color_mad = "tab:blue"
-    ax2.set_ylabel("MAD", color=color_mad)  # we already handled the x-label with ax1
-    ax2.plot(mad_epochs, color=color_mad, label="MAD")
+    ax2.set_ylabel(
+        "Mean Absolute Deviation", color=color_mad
+    )  # we already handled the x-label with ax1
+    ax2.plot(mad_epochs, color=color_mad, label="Mean Absolute Deviation")
     ax2.tick_params(axis="y", labelcolor=color_mad)
 
     # Add a title and legend to the plot
@@ -219,7 +221,7 @@ def plot_dual_loss(loss_epochs, mad_epochs, title="Training Metrics Over Epochs"
     # Manually create a legend that includes both lines
     lines, labels = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
-    ax2.legend(lines + lines2, labels + labels2, loc="best")
+    ax2.legend(lines + lines2, labels + labels2, loc="best", fontsize=15)
 
     # return axis
     return fig, ax1, ax2

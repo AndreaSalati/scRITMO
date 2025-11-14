@@ -196,6 +196,7 @@ class Beta(pd.DataFrame):
             amp = (np.max(y_dense[:, gene]) - np.min(y_dense[:, gene])) / 2
             phase = phi_dense[np.argmax(y_dense[:, gene])]
             log2fc = np.log2(np.e) * 2 * amp
+            log10_mean = np.log10(np.e) * np.mean(y_dense[:, gene])
 
             if extended:
                 y_mean = np.mean(y_dense[:, gene])
@@ -626,9 +627,9 @@ class Beta(pd.DataFrame):
         plt.tight_layout()
         plt.show()
 
-    def quick_filtering(self, min_log2fc=0.8, min_amp=-13, min_pval=0.05):
+    def quick_filtering(self, min_log2fc=0.8, min_mean=-13, min_pval=0.05):
         """
-        Quick filtering of genes based on log2fc, amplitude, and p-value.
+        Quick filtering of genes based on log2fc, min_mean, and p-value.
         Returns a filtered Beta object.
         """
         mask = np.ones(len(self), dtype=bool)
@@ -637,7 +638,7 @@ class Beta(pd.DataFrame):
             mask &= self["log2fc"] >= min_log2fc
 
         if "amp" in self.columns:
-            mask &= self["amp"] >= min_amp
+            mask &= self["a_0"] >= min_mean
 
         if "pvalue_correctedBH" in self.columns:
             mask &= self["pvalue_correctedBH"] <= min_pval

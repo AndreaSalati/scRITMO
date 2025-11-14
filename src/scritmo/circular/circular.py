@@ -128,9 +128,10 @@ def cSTD(theta, adjust=False):
         return np.inf  # Handle case where R is zero
     return np.sqrt(-2 * np.log(R_value))
 
+
 def cstd2R(cstd):
     """return mean resultant length R given circular standard deviation in radians"""
-    R = np.exp(- (cstd ** 2) / 2)
+    R = np.exp(-(cstd**2) / 2)
     if R < 0 or R >= 1:
         raise ValueError("circular standard deviation must be in [0, inf)")
     return R
@@ -158,6 +159,21 @@ def compute_posterior_mean(l_xc):
     return post_mean_c
 
 
+def compute_posterior_mode(l_xc):
+    """
+    This function is used to find the MODE of the distribution.
+    Very often distributions are bimodal, and gradient descent fails
+    to find the correct solution.
+    """
+    # for every cell get the argmax of the likelihood
+    phi_x = np.linspace(0, 2 * np.pi, l_xc.shape[0] + 1)[:-1]
+
+    phi_max_ind = np.argmax(l_xc, axis=0)
+    # phi_max_ind = list(phi_max_ind)
+    phi_mode = phi_x[phi_max_ind]
+    return phi_mode
+
+
 # fucntions that used to get the moments of the numerical approximation of the
 # posterior distribution of the phase
 def circ_mean_P(P):
@@ -181,21 +197,3 @@ def circ_std_P(P):
     phis = np.linspace(0, 2 * np.pi, P.shape[0] + 1)[:-1]
     std = np.sqrt(-2 * np.log(np.abs(np.sum(np.exp(1j * phis) * P))))
     return std
-
-
-def circ_mode(l_xc):
-    """
-    This function is used to find the MODE of the distribution.
-    Very often distributions are bimodal, and gradient descent fails
-    to find the correct solution.
-    """
-    # for every cell get the argmax of the likelihood
-    phi_x = np.linspace(0, 2 * np.pi, l_xc.shape[0] + 1)[:-1]
-
-    phi_max_ind = np.argmax(l_xc, axis=0)
-    # phi_max_ind = list(phi_max_ind)
-    phi_mode = phi_x[phi_max_ind]
-    return phi_mode
-
-
-

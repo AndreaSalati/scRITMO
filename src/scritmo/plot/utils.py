@@ -9,6 +9,7 @@ from adjustText import adjust_text
 
 import seaborn as sns
 from scipy.stats import vonmises
+from statannotations.Annotator import Annotator
 
 
 def xy(color="red", linestyle="--", legend_label=""):
@@ -258,3 +259,79 @@ def hexbin_with_marginals(
     cb.set_label("log10(N)" if density == "log" else "count")
 
     return ax_joint
+
+
+def plot_annotated_barplot(
+    df: pd.DataFrame,
+    x: str,
+    y: str,
+    hue: str,
+    estimator=np.mean,
+    test: str = "t-test_ind",
+    text_format: str = "star",
+    loc: str = "outside",
+    rotation: int = 45,
+    **barplot_kwargs,
+):
+    """
+    Creates a seaborn barplot comparing two groups within a hue category
+    and adds statistical annotations between them.
+
+    Args:
+        df (pd.DataFrame): The DataFrame containing the data.
+        x (str): The column name for the x-axis (e.g., 'celltype').
+        y (str): The column name for the y-axis (e.g., 'count').
+        hue (str): The column name for the hue, which MUST have exactly
+                   two unique values (e.g., 'count_type').
+        estimator (callable, optional): Statistical function to estimate
+            within each categorical bin. Defaults to None (mean).
+        test (str, optional): The statistical test to use.
+            Defaults to "t-test_ind".
+        text_format (str, optional): Format of the annotation text.
+            Defaults to "star".
+        loc (str, optional): Location of the annotation. Defaults to "outside".
+        rotation (int, optional): Rotation angle for x-axis labels.
+            Defaults to 45.
+        **barplot_kwargs: Additional keyword arguments passed to sns.barplot.
+
+    Returns:
+        matplotlib.axes.Axes: The Axes object with the plot.
+    """
+
+    # --- 1. Validate Hue Column ---
+    hue_values = df[hue].unique()
+    if len(hue_values) != 2:
+        raise ValueError(
+            f"Hue column '{hue}' must have exactly 2 unique values, "
+            f"but it has {len(hue_values)}: {hue_values}"
+        )
+
+    # Ensure consistent order
+    hue_values = sorted(list(hue_values))
+
+    # --- 2. Create the Barplot ---
+    ax = sns.barplot(data=df, x=x, y=y, hue=hue, estimator=estimator, **barplot_kwargs)
+    plt.xticks(rotation=rotation)
+
+    # --- 3. Define Pairs for Annotation ---
+    # Get all unique x-axis categories
+    x_categories = df[x].unique()
+
+    # Create pairs for each x-category between the two hue groups
+    pairs = [
+        ((category, hue_values[0]), (category, hue_values[1]))
+        for category in x_categories
+    ]
+
+    # --- 4. Add Statistical Annotations ---
+    annotator = Annotator(ax, pairs=pairs, data=df, x=x, y=y, hue=hue)
+    annotator.configure(test=test, text_format=text_format, loc=loc)
+
+    # Apply the annotations
+    try:
+        annotator.apply_and_annotate()
+    except Exception as e:
+        print(f"Error during annotation: {e}")
+        print("Please check if your data is appropriate for the selected test.")
+
+    return ax
