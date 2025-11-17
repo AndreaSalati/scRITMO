@@ -1,12 +1,10 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
 from scritmo.basics import w, rh, ind2
 import matplotlib.gridspec as gridspec
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from adjustText import adjust_text
-
 import seaborn as sns
 from scipy.stats import vonmises
 from statannotations.Annotator import Annotator
@@ -271,6 +269,8 @@ def plot_annotated_barplot(
     text_format: str = "star",
     loc: str = "outside",
     rotation: int = 45,
+    ax=None,
+    verbose_annoations: bool = False,
     **barplot_kwargs,
 ):
     """
@@ -282,9 +282,9 @@ def plot_annotated_barplot(
         x (str): The column name for the x-axis (e.g., 'celltype').
         y (str): The column name for the y-axis (e.g., 'count').
         hue (str): The column name for the hue, which MUST have exactly
-                   two unique values (e.g., 'count_type').
+                    two unique values (e.g., 'count_type').
         estimator (callable, optional): Statistical function to estimate
-            within each categorical bin. Defaults to None (mean).
+            within each categorical bin. Defaults to mean.
         test (str, optional): The statistical test to use.
             Defaults to "t-test_ind".
         text_format (str, optional): Format of the annotation text.
@@ -292,6 +292,8 @@ def plot_annotated_barplot(
         loc (str, optional): Location of the annotation. Defaults to "outside".
         rotation (int, optional): Rotation angle for x-axis labels.
             Defaults to 45.
+        ax (matplotlib.axes.Axes, optional): Axes to draw the plot on. If None,
+            a new figure and axes are created.
         **barplot_kwargs: Additional keyword arguments passed to sns.barplot.
 
     Returns:
@@ -309,25 +311,39 @@ def plot_annotated_barplot(
     # Ensure consistent order
     hue_values = sorted(list(hue_values))
 
-    # --- 2. Create the Barplot ---
-    ax = sns.barplot(data=df, x=x, y=y, hue=hue, estimator=estimator, **barplot_kwargs)
-    plt.xticks(rotation=rotation)
+    # --- 2. Prepare Axes ---
+    if ax is None:
+        fig, ax = plt.subplots()
 
-    # --- 3. Define Pairs for Annotation ---
-    # Get all unique x-axis categories
-    x_categories = df[x].unique()
+    # --- 3. Create the Barplot ---
+    ax = sns.barplot(
+        data=df, x=x, y=y, hue=hue, estimator=estimator, ax=ax, **barplot_kwargs
+    )
+    plt.setp(ax.get_xticklabels(), rotation=rotation)
 
-    # Create pairs for each x-category between the two hue groups
-    pairs = [
-        ((category, hue_values[0]), (category, hue_values[1]))
-        for category in x_categories
-    ]
+    # --- 4. Define Pairs for Annotation ---
+    # Get all unique x-axis categories in the order plotted
+    x_categories = [t.get_text() for t in ax.get_xticklabels()]
+    if not any(x_categories):  # fallback if tick labels are empty strings
+        x_categories = df[x].unique()
 
-    # --- 4. Add Statistical Annotations ---
+    # Create pairs for statistical annotation
+    if hue == x:
+        # If hue and x are the same, compare the two hue groups directly
+        pairs = [(hue_values[0], hue_values[1])]
+    else:
+        # Create pairs for each x-category between the two hue groups
+        pairs = [
+            ((category, hue_values[0]), (category, hue_values[1]))
+            for category in x_categories
+        ]
+
+    # --- 5. Add Statistical Annotations ---
     annotator = Annotator(ax, pairs=pairs, data=df, x=x, y=y, hue=hue)
-    annotator.configure(test=test, text_format=text_format, loc=loc)
+    annotator.configure(
+        test=test, text_format=text_format, loc=loc, verbose=verbose_annoations
+    )
 
-    # Apply the annotations
     try:
         annotator.apply_and_annotate()
     except Exception as e:
