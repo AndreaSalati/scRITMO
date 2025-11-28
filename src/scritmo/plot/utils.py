@@ -271,6 +271,7 @@ def plot_annotated_barplot(
     rotation: int = 45,
     ax=None,
     verbose_annoations: bool = False,
+    annotate_values: bool = False,
     **barplot_kwargs,
 ):
     """
@@ -294,6 +295,7 @@ def plot_annotated_barplot(
             Defaults to 45.
         ax (matplotlib.axes.Axes, optional): Axes to draw the plot on. If None,
             a new figure and axes are created.
+        annotate_values (bool, optional): If True, print bar heights on the plot.
         **barplot_kwargs: Additional keyword arguments passed to sns.barplot.
 
     Returns:
@@ -321,7 +323,22 @@ def plot_annotated_barplot(
     )
     plt.setp(ax.get_xticklabels(), rotation=rotation)
 
-    # --- 4. Define Pairs for Annotation ---
+    # --- 4. Optionally Annotate Bar Heights ---
+    if annotate_values:
+        for bar in ax.patches:
+            height = bar.get_height()
+            ax.annotate(
+                f"{height:.2f}",
+                (bar.get_x() + bar.get_width() / 2, height),
+                ha="center",
+                va="bottom",
+                fontsize=12,
+                color="black",
+                xytext=(0, 3),
+                textcoords="offset points",
+            )
+
+    # --- 5. Define Pairs for Annotation ---
     # Get all unique x-axis categories in the order plotted
     x_categories = [t.get_text() for t in ax.get_xticklabels()]
     if not any(x_categories):  # fallback if tick labels are empty strings
@@ -338,7 +355,7 @@ def plot_annotated_barplot(
             for category in x_categories
         ]
 
-    # --- 5. Add Statistical Annotations ---
+    # --- 6. Add Statistical Annotations ---
     annotator = Annotator(ax, pairs=pairs, data=df, x=x, y=y, hue=hue)
     annotator.configure(
         test=test, text_format=text_format, loc=loc, verbose=verbose_annoations

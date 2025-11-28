@@ -203,9 +203,11 @@ class Beta(pd.DataFrame):
                 y_min = np.min(y_dense[:, gene])
                 y_max = np.max(y_dense[:, gene])
                 amp_abs = y_max - y_min
-                out.append([y_mean, y_min, y_max, amp_abs, phase, amp, log2fc])
+                out.append(
+                    [y_mean, y_min, y_max, amp_abs, phase, amp, log2fc, log10_mean]
+                )
             else:
-                out.append([phase, amp, log2fc])
+                out.append([phase, amp, log2fc, log10_mean])
 
         # Define columns based on the 'extended' parameter
         if extended:
@@ -217,9 +219,10 @@ class Beta(pd.DataFrame):
                 "phase",
                 "amp",
                 "log2fc",
+                "log10_mean",
             ]
         else:
-            cols = ["phase", "amp", "log2fc"]
+            cols = ["phase", "amp", "log2fc", "log10_mean"]
 
         out_df = pd.DataFrame(out, columns=cols, index=self.index)
 
