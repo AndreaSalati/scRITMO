@@ -259,11 +259,13 @@ def hexbin_with_marginals(
     return ax_joint
 
 
-def plot_annotated_barplot(
-    df: pd.DataFrame,
+def plot_annotated_comparison(
+    data: pd.DataFrame,
     x: str,
     y: str,
     hue: str,
+    plot_type: str = "bar",
+    show_points: bool = False,
     estimator=np.mean,
     test: str = "t-test_ind",
     text_format: str = "star",
@@ -272,91 +274,119 @@ def plot_annotated_barplot(
     ax=None,
     verbose_annoations: bool = False,
     annotate_values: bool = False,
-    **barplot_kwargs,
+    **plot_kwargs,
 ):
     """
-    Creates a seaborn barplot comparing two groups within a hue category
+    Creates a seaborn barplot or boxplot comparing two groups within a hue category
     and adds statistical annotations between them.
-
-    Args:
-        df (pd.DataFrame): The DataFrame containing the data.
-        x (str): The column name for the x-axis (e.g., 'celltype').
-        y (str): The column name for the y-axis (e.g., 'count').
-        hue (str): The column name for the hue, which MUST have exactly
-                    two unique values (e.g., 'count_type').
-        estimator (callable, optional): Statistical function to estimate
-            within each categorical bin. Defaults to mean.
-        test (str, optional): The statistical test to use.
-            Defaults to "t-test_ind".
-        text_format (str, optional): Format of the annotation text.
-            Defaults to "star".
-        loc (str, optional): Location of the annotation. Defaults to "outside".
-        rotation (int, optional): Rotation angle for x-axis labels.
-            Defaults to 45.
-        ax (matplotlib.axes.Axes, optional): Axes to draw the plot on. If None,
-            a new figure and axes are created.
-        annotate_values (bool, optional): If True, print bar heights on the plot.
-        **barplot_kwargs: Additional keyword arguments passed to sns.barplot.
-
-    Returns:
-        matplotlib.axes.Axes: The Axes object with the plot.
     """
 
-    # --- 1. Validate Hue Column ---
-    hue_values = df[hue].unique()
+    # --- 1. Validate Hue and Define Orders ---
+    hue_values = sorted(data[hue].unique())
     if len(hue_values) != 2:
         raise ValueError(
-            f"Hue column '{hue}' must have exactly 2 unique values, "
-            f"but it has {len(hue_values)}: {hue_values}"
+            f"Hue column '{hue}' must have exactly 2 unique values, found: {hue_values}"
+        )
+    if hue == x:
+        x = hue + " "
+        data[x] = "value"
+
+    # We explicitly define the order to ensure consistency between the plot and the annotator
+    order = sorted(data[x].unique())
+    hue_order = hue_values
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+    # --- 2. Create the Plot ---
+    if plot_type == "bar":
+        ax = sns.barplot(
+            data=data,
+            x=x,
+            y=y,
+            hue=hue,
+            estimator=estimator,
+            ax=ax,
+            order=order,
+            hue_order=hue_order,
+            **plot_kwargs,
         )
 
-    # Ensure consistent order
-    hue_values = sorted(list(hue_values))
+        if annotate_values:
+            for bar in ax.patches:
+                height = bar.get_height()
+                if np.isnan(height):
+                    continue
+                ax.annotate(
+                    f"{height:.2f}",
+                    (bar.get_x() + bar.get_width() / 2, height),
+                    ha="center",
+                    va="bottom",
+                    fontsize=10,
+                    xytext=(0, 3),
+                    textcoords="offset points",
+                )
 
-    # --- 2. Prepare Axes ---
-    if ax is None:
-        fig, ax = plt.subplots()
+    elif plot_type == "box":
+        ax = sns.boxplot(
+            data=data,
+            x=x,
+            y=y,
+            hue=hue,
+            ax=ax,
+            order=order,
+            hue_order=hue_order,
+            **plot_kwargs,
+        )
 
-    # --- 3. Create the Barplot ---
-    ax = sns.barplot(
-        data=df, x=x, y=y, hue=hue, estimator=estimator, ax=ax, **barplot_kwargs
-    )
-    plt.setp(ax.get_xticklabels(), rotation=rotation)
-
-    # --- 4. Optionally Annotate Bar Heights ---
-    if annotate_values:
-        for bar in ax.patches:
-            height = bar.get_height()
-            ax.annotate(
-                f"{height:.2f}",
-                (bar.get_x() + bar.get_width() / 2, height),
-                ha="center",
-                va="bottom",
-                fontsize=12,
+        if show_points:
+            sns.stripplot(
+                data=data,
+                x=x,
+                y=y,
+                hue=hue,
+                ax=ax,
+                dodge=True,
                 color="black",
-                xytext=(0, 3),
-                textcoords="offset points",
+                alpha=0.6,
+                jitter=True,
+                size=4,
+                order=order,
+                hue_order=hue_order,
             )
 
-    # --- 5. Define Pairs for Annotation ---
-    # Get all unique x-axis categories in the order plotted
-    x_categories = [t.get_text() for t in ax.get_xticklabels()]
-    if not any(x_categories):  # fallback if tick labels are empty strings
-        x_categories = df[x].unique()
+            # Clean up legend (remove duplicates from stripplot)
+            handles, labels = ax.get_legend_handles_labels()
+            if len(labels) > 2:
+                ax.legend(handles[:2], labels[:2], title=hue)
 
-    # Create pairs for statistical annotation
-    if hue == x:
-        # If hue and x are the same, compare the two hue groups directly
-        pairs = [(hue_values[0], hue_values[1])]
     else:
-        # Create pairs for each x-category between the two hue groups
-        pairs = [
-            ((category, hue_values[0]), (category, hue_values[1]))
-            for category in x_categories
-        ]
+        raise ValueError("plot_type must be 'bar' or 'box'")
 
-    # --- 6. Add Statistical Annotations ---
-    annotator = Annotator(ax, pairs=pairs, data=df, x=x, y=y, hue=hue)
+    plt.setp(ax.get_xticklabels(), rotation=rotation)
+
+    # --- 3. Define Pairs for Annotation ---
+    # The pairs must be formatted as ((x_cat, hue_val1), (x_cat, hue_val2))
+    pairs = [
+        ((category, hue_values[0]), (category, hue_values[1])) for category in order
+    ]
+
+    # --- 4. Add Statistical Annotations ---
+    # CRITICAL FIX: We must pass 'plot' to Annotator so it handles the hue nesting correctly
+    sa_plot_type = "barplot" if plot_type == "bar" else "boxplot"
+
+    annotator = Annotator(
+        ax,
+        pairs=pairs,
+        data=data,
+        x=x,
+        y=y,
+        hue=hue,
+        order=order,
+        hue_order=hue_order,
+        plot=sa_plot_type,
+    )
+
     annotator.configure(
         test=test, text_format=text_format, loc=loc, verbose=verbose_annoations
     )
@@ -365,6 +395,6 @@ def plot_annotated_barplot(
         annotator.apply_and_annotate()
     except Exception as e:
         print(f"Error during annotation: {e}")
-        print("Please check if your data is appropriate for the selected test.")
+        raise e
 
     return ax

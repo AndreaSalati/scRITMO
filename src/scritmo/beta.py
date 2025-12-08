@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 from adjustText import adjust_text
 from .plot.utils import polar_plot
+from scipy.stats import circmean, circstd
 
 
 class Beta(pd.DataFrame):
@@ -630,7 +631,7 @@ class Beta(pd.DataFrame):
         plt.tight_layout()
         plt.show()
 
-    def quick_filtering(self, min_log2fc=0.8, min_mean=-13, min_pval=0.05):
+    def quick_filtering(self, min_log2fc=0.8, min_mean=-13, min_pval=0.05, min_r2=0.0):
         """
         Quick filtering of genes based on log2fc, min_mean, and p-value.
         Returns a filtered Beta object.
@@ -645,6 +646,9 @@ class Beta(pd.DataFrame):
 
         if "pvalue_correctedBH" in self.columns:
             mask &= self["pvalue_correctedBH"] <= min_pval
+
+        if "r2" in self.columns:
+            mask &= self["r2"] >= min_r2
 
         return self.loc[mask].copy()
 
@@ -761,13 +765,13 @@ import numpy as np
 def plot_beta_shift(
     beta_1,
     beta_2,
+    labels=["beta1", "beta2"],
     genes=None,
     amp_lim=[0.0, 10.0],
     s=40,
     alpha=1,
     fontsize=10,
     col_names=["log2fc", "phase"],
-    labels=["beta1", "beta2"],
     color1="tab:blue",
     color2="tab:orange",
     line_color="gray",
@@ -848,3 +852,40 @@ def plot_beta_shift(
         ax.annotate(gene, (phase2, amp2), fontsize=fontsize)
 
     ax.legend(loc="upper right")
+
+
+def mean_betas_phase(beta_list, estimator="mean", genes=None):
+    """
+    Given a list of Beta objects, find the circular median for each
+    gene across all Betas.
+
+    Parameters:
+
+    beta_list : List[Beta] or Dict[str, Beta]
+        List or dictionary of Beta objects to analyze.
+    estimator : str, 'mean' or 'median'
+        Method to compute central tendency of phases.
+    """
+    if isinstance(beta_list, dict):
+        beta_list = list(beta_list.values())
+
+    temp = set(beta_list[0].index)
+    for beta in beta_list[1:]:
+        temp = temp.intersection(beta.index)
+    common_g = list(temp)
+    beta_list = [beta.loc[common_g] for beta in beta_list]
+
+    if genes is not None:
+        genes = np.intersect1d(genes, common_g)
+        common_g = genes
+        beta_list = [beta.loc[common_g] for beta in beta_list]
+
+    phases = np.array(
+        [beta["phase"].values for beta in beta_list]
+    )  # shape (N_beta, N_genes)
+
+    mean_ph = np.apply_along_axis(
+        lambda ph: circmean(ph), 0, phases
+    )  # shape (N_genes, )
+
+    return pd.Series(mean_ph, index=common_g)
