@@ -132,9 +132,12 @@ def cSTD(theta, adjust=False):
 def cstd2R(cstd):
     """return mean resultant length R given circular standard deviation in radians"""
     R = np.exp(-(cstd**2) / 2)
-    if R < 0 or R >= 1:
-        raise ValueError("circular standard deviation must be in [0, inf)")
     return R
+
+def R2cstd(R):
+    """return circular standard deviation in radians given mean resultant length R"""
+    cstd = np.sqrt(-2 * np.log(R))
+    return cstd
 
 
 def compute_posterior_statistics(l_xc):
