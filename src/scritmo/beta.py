@@ -758,8 +758,20 @@ def cSVD_beta(res, center_around="mean", amp_col="log2fc"):
     return U_, V_, S_norm
 
 
-import matplotlib.pyplot as plt
-import numpy as np
+def polar_module(V):
+    """
+    Take the output of cSVD and returns the polar version.
+    Pass V for the condition module and U for the genes
+    """
+    angle = np.angle(V[:, 0])
+    radius = np.abs(V[:, 0])
+    return angle, radius
+
+
+def cSVD_condition_module(par_dict, center_around="mean", amp_col="log2fc"):
+    U, V, S_norm = cSVD_beta(par_dict, center_around=center_around, amp_col=amp_col)
+    angle, radius = polar_module(V)
+    return angle, radius
 
 
 def plot_beta_shift(
