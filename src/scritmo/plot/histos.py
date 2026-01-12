@@ -341,6 +341,7 @@ def plot_polar_histogram(
     show_grid=True,
     hist_density=False,
     alpha=0.6,
+    ax=None,
 ):
     """
     Plot a single phase population histogram on a polar plot.
@@ -384,6 +385,7 @@ def plot_polar_histogram(
         inner_ring_size=rorigin_value,
         show_rlabels=show_rlabels,
         show_grid=show_grid,
+        ax=ax,
     )
     fig = ax.figure
 
@@ -399,5 +401,5 @@ def plot_polar_histogram(
 
     # --- Final Touches ---
     ax.set_title(f"{title or 'Phase Population'}", va="bottom")
-    fig.tight_layout()
+    # fig.tight_layout()
     return fig, ax
