@@ -1,7 +1,7 @@
 import matplotlib.transforms as transforms
 from matplotlib.gridspec import GridSpecFromSubplotSpec
 from matplotlib import pyplot as plt
-import constants
+from scritmo.plot import panels_constants as constants
 import math
 from functools import reduce
 

@@ -101,34 +101,36 @@ def scatter_with_labels(
     x,
     y,
     labels,
+    ax=None,
     fontsize=10,
     arrowstyle="-",
     color_arr="black",
     adjust=True,
+    scatter=False,
 ):
     """
-    Plots a scatter and annotates it with non-overlapping labels.
-
-    Args:
-        x (array-like): x-coordinates
-        y (array-like): y-coordinates
-        labels (array-like): list of strings for annotation
-        fontsize (int): font size of the labels
-        s (int): scatter marker size
+    Plots a scatter and annotates it with non-overlapping labels on a specific ax.
     """
+    if ax is None:
+        ax = plt.gca()
+
+    # Create the scatter plot
+    if scatter:
+        ax.scatter(x, y)
+
     texts = []
     for xi, yi, label in zip(x, y, labels):
-        texts.append(plt.text(xi, yi, label, fontsize=fontsize))
+        texts.append(ax.text(xi, yi, label, fontsize=fontsize))
 
     if adjust:
+        # adjust_text needs the ax to calculate overlaps correctly
         adjust_text(
-            texts, arrowprops=dict(arrowstyle=arrowstyle, color=color_arr, lw=0.5)
+            texts,
+            ax=ax,
+            arrowprops=dict(arrowstyle=arrowstyle, color=color_arr, lw=0.5),
         )
-    else:
 
-        # annotate
-        for i, label in enumerate(labels):
-            plt.text(x[i], y[i], label, fontsize=fontsize)
+    return ax
 
 
 def integrated_histo(v, tr_vec, normalize=True):
@@ -398,3 +400,92 @@ def plot_annotated_comparison(
         raise e
 
     return ax
+
+
+def adjust_polar_text(df, theta_col, r_col, ax, label_col=None, fontsize=9, **kwargs):
+    """
+    Robustly adjusts text on a polar plot by projecting to a Cartesian grid
+    that matches the EXACT physical dimensions of the target subplot.
+    """
+    # 1. Extract Data
+    r = df[r_col].values
+    theta = df[theta_col].values
+    labels = df.index if label_col is None else df[label_col].values
+
+    # 2. Project to Cartesian (North=0, Clockwise)
+    x_cart = r * np.sin(theta)
+    y_cart = r * np.cos(theta)
+
+    # --- THE CRITICAL FIX ---
+    # Calculate the actual size of subplot 'ax' in inches
+    # ax.get_position() returns relative bbox (0-1). We multiply by figure size.
+    bbox = ax.get_position()
+    fig_width, fig_height = ax.figure.get_size_inches()
+
+    # Dimensions in inches (with a small safety floor to prevent 0-size errors)
+    width_inch = max(bbox.width * fig_width, 1.0)
+    height_inch = max(bbox.height * fig_height, 1.0)
+
+    # 3. Create Dummy Figure with the CORRECT scaled size
+    # Now adjust_text will struggle with space just like the real plot,
+    # forcing it to find better positions.
+    fig_temp, ax_temp = plt.subplots(figsize=(width_inch, height_inch))
+
+    # Match limits to preserve aspect ratio / density
+    limit = max(r) * 1.5
+    ax_temp.set_xlim(-limit, limit)
+    ax_temp.set_ylim(-limit, limit)
+
+    # Plot invisible obstacles
+    scat_size = kwargs.pop("s", 50)
+    scat = ax_temp.scatter(x_cart, y_cart, s=scat_size, color="red", alpha=0)
+
+    texts_temp = []
+    for x, y, label in zip(x_cart, y_cart, labels):
+        # Pre-Alignment Logic
+        ha = "left" if x >= 0 else "right"
+        va = "bottom" if y >= 0 else "top"
+
+        # Pass fontsize so algorithm knows real text collision size
+        texts_temp.append(ax_temp.text(x, y, label, ha=ha, va=va, fontsize=fontsize))
+
+    # 4. Run adjust_text
+    adjust_text(
+        texts_temp,
+        ax=ax_temp,
+        add_objects=[scat],
+        **kwargs,
+    )
+
+    # 5. Map Back to Polar and Plot
+    adjusted_texts = []
+    for i, t in enumerate(texts_temp):
+        x_adj, y_adj = t.get_position()
+
+        # Convert Cartesian back to Polar
+        r_adj = np.sqrt(x_adj**2 + y_adj**2)
+        theta_adj = np.arctan2(x_adj, y_adj)
+
+        # Add text to real axis
+        new_text = ax.text(
+            theta_adj,
+            r_adj,
+            t.get_text(),
+            ha=t.get_horizontalalignment(),
+            va=t.get_verticalalignment(),
+            fontsize=fontsize,
+            zorder=100,
+        )
+        adjusted_texts.append(new_text)
+
+        if "arrowprops" in kwargs:
+            ax.annotate(
+                "",
+                xy=(theta[i], r[i]),
+                xytext=(theta_adj, r_adj),
+                arrowprops=kwargs["arrowprops"],
+                zorder=99,
+            )
+
+    plt.close(fig_temp)
+    return adjusted_texts

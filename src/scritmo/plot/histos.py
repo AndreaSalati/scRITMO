@@ -174,7 +174,8 @@ def plot_phase_polar_population(
     hist_density=False,
     scatter_s=10,
     show_legend=True,
-
+    xtick_fontsize=20,
+    ax=None,
 ):
     """
     Plot phase population on a polar plot, with adaptive inner ring for histograms.
@@ -234,6 +235,8 @@ def plot_phase_polar_population(
         inner_ring_size=rorigin_value,
         show_rlabels=show_rlabels,
         show_grid=show_grid,
+        xtick_fontsize=xtick_fontsize,
+        ax=ax,
     )
 
     fig = ax.figure

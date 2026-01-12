@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import re
 from adjustText import adjust_text
-from .plot.utils import polar_plot
+from .plot.utils import polar_plot, adjust_polar_text
 from scipy.stats import circmean, circstd
 
 
@@ -277,9 +277,11 @@ class Beta(pd.DataFrame):
         title="",
         amp_lim=[0.0, 10.0],
         s=20,
-        fontisize=12,
+        fontsize=12,
         col_names=["log2fc", "phase"],
         polar_plot_args={},
+        ax=None,
+        adjust_polar=False,
     ):
         """
         Takes as input a pandas dataframe with columns "log2fc", "phase"
@@ -287,7 +289,7 @@ class Beta(pd.DataFrame):
         """
 
         # polar plot stuff
-        ax = polar_plot(title=title, **polar_plot_args)
+        ax = polar_plot(title=title, ax=ax, **polar_plot_args)
 
         if genes_to_plot is None:
             genes_to_plot = self.index
@@ -298,35 +300,27 @@ class Beta(pd.DataFrame):
 
             if gene not in genes_to_plot:
                 continue
-
             if amp < amp_lim[0] or amp > amp_lim[1]:
                 continue
 
-            ax.scatter(phase, amp, s=s)
+            ax.scatter(phase, amp, s=s, color="C0")
             # annotate
 
-            ax.annotate(gene, (phase, amp), fontsize=fontisize)
+            if not adjust_polar:
+                ax.annotate(gene, (phase, amp), fontsize=fontsize)
 
-    def plot_circular2(
-        self,
-        genes_to_plot=None,
-        title="",
-        amp_lim=[0.0, 10.0],
-        s=20,
-        fontisize=12,
-        col_names=["log2fc", "phase"],
-    ):
-        """
-        Wrapper around plot_circular to handle default genes_to_plot.
-        """
-        self.plot_circular(
-            genes_to_plot=genes_to_plot,
-            title=title,
-            amp_lim=amp_lim,
-            s=s,
-            fontisize=fontisize,
-            col_names=col_names,
-        )
+        if adjust_polar:
+            texts = adjust_polar_text(
+                df=self,
+                theta_col=col_names[1],
+                r_col=col_names[0],
+                ax=ax,
+                fontsize=fontsize,
+                # Parameters to force spreading:
+                expand_points=(2, 2),  # Push hard away from points
+                # force_text=(1.0, 1.0),  # Nudge text away from overlaps
+                arrowprops=dict(arrowstyle="-", color="black", lw=0.5),
+            )
 
     def plot_means(self):
         """
