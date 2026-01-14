@@ -177,7 +177,7 @@ def update_xtick_labels(ax, data, x_col, label_col, rotation=45):
     new_labels = [mapping.get(lbl, lbl) for lbl in current_labels]
 
     # 3. Update the axes
-    ax.set_xticklabels(new_labels, rotation=rotation, ha="right")
+    ax.set_xticklabels(new_labels, rotation=rotation, ha="center")
 
 
 def plot_dual_layer(
@@ -195,6 +195,7 @@ def plot_dual_layer(
     dark_factor=0.8,
     xticks_col=None,
     rotation=45,
+    show_color_legend=True,
     **kwargs,
 ):
     if ax is None:
@@ -254,18 +255,19 @@ def plot_dual_layer(
         Line2D([0], [0], color="black", lw=4, label=f"{hue_order[1]}"),
         # Line2D([0], [0], color="white", label=""),
     ]
-    for cat_name, col in palette.items():
-        legend_elements.append(
-            Line2D(
-                [0],
-                [0],
-                marker="s",
-                color="w",
-                markerfacecolor=col,
-                markersize=10,
-                label=cat_name,
+    if show_color_legend:
+        for cat_name, col in palette.items():
+            legend_elements.append(
+                Line2D(
+                    [0],
+                    [0],
+                    marker="s",
+                    color="w",
+                    markerfacecolor=col,
+                    markersize=10,
+                    label=cat_name,
+                )
             )
-        )
     ax.legend(handles=legend_elements, loc="best")
 
     # 6. Rename X-Ticks (New Feature)
@@ -277,6 +279,9 @@ def plot_dual_layer(
         current_labels = [lbl.get_text() for lbl in ax.get_xticklabels()]
         new_labels = [mapping.get(lbl, lbl) for lbl in current_labels]
         ax.set_xticklabels(new_labels, rotation=rotation, ha="center")
+
+    # remvove x label
+    ax.set_xlabel("")
 
     return ax
 

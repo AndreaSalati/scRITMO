@@ -9,7 +9,6 @@ import seaborn as sns
 from scipy.stats import vonmises
 
 
-
 def xy(color="red", linestyle="--", legend_label=""):
     plt.axline(
         (0, 0),
@@ -261,9 +260,16 @@ def hexbin_with_marginals(
     return ax_joint
 
 
-
-
-def adjust_polar_text(df, theta_col, r_col, ax, label_col=None, fontsize=9, **kwargs):
+def adjust_polar_text(
+    df,
+    theta_col,
+    r_col,
+    ax,
+    label_col=None,
+    fontsize=9,
+    arrowprops=dict(arrowstyle="-", color="black", lw=0.5),
+    **kwargs,
+):
     """
     Robustly adjusts text on a polar plot by projecting to a Cartesian grid
     that matches the EXACT physical dimensions of the target subplot.
@@ -339,12 +345,12 @@ def adjust_polar_text(df, theta_col, r_col, ax, label_col=None, fontsize=9, **kw
         )
         adjusted_texts.append(new_text)
 
-        if "arrowprops" in kwargs:
+        if arrowprops is not None:
             ax.annotate(
                 "",
                 xy=(theta[i], r[i]),
                 xytext=(theta_adj, r_adj),
-                arrowprops=kwargs["arrowprops"],
+                arrowprops=arrowprops,
                 zorder=99,
             )
 
