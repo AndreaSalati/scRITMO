@@ -5,3 +5,4 @@ from .histos import *
 from .misc import *
 from .plot_generator_fns import *
 from .utils import *
+from .bar_box import *

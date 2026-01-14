@@ -18,7 +18,7 @@ from .utils import polar_plot
 import numpy as np
 
 
-def hist(x, bins=30, normalize=False):
+def hist(x, bins=30, normalize=False, ax=None):
     """
     Plot a histogram of x.
 
@@ -31,9 +31,10 @@ def hist(x, bins=30, normalize=False):
     normalize : bool
         If True, normalize the histogram (density=True).
     """
-    _, _, _ = plt.hist(x, bins=bins, density=normalize)
-    ax = plt.gca()
-    fig = plt.gcf()
+    if ax is None:
+        _, ax = plt.subplots()
+    _, _, _ = ax.hist(x, bins=bins, density=normalize)
+    fig = ax.figure
     # plt.show()
     return ax, fig
 
