@@ -176,6 +176,7 @@ def plot_phase_polar_population(
     scatter_s=10,
     show_legend=True,
     xtick_fontsize=20,
+    n_phase_ticks=6,
     ax=None,
 ):
     """
@@ -237,6 +238,7 @@ def plot_phase_polar_population(
         show_rlabels=show_rlabels,
         show_grid=show_grid,
         xtick_fontsize=xtick_fontsize,
+        n_phase_ticks=n_phase_ticks,
         ax=ax,
     )
 
@@ -327,7 +329,7 @@ def plot_phase_polar_population(
     ax.set_title(f"{title or 'Phase Population'}", va="bottom")
     if plot_type == "histogram":
         if show_legend:
-            ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
+            ax.legend(loc="upper right")
     fig.tight_layout()
     return fig, ax
 

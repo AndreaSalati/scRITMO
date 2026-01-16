@@ -9,8 +9,10 @@ import seaborn as sns
 from scipy.stats import vonmises
 
 
-def xy(color="red", linestyle="--", legend_label=""):
-    plt.axline(
+def xy(color="red", linestyle="--", legend_label="", ax=None):
+    if ax is None:
+        ax = plt.gca()
+    ax.axline(
         (0, 0),
         slope=1,
         color=color,
