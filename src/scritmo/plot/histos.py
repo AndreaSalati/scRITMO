@@ -18,7 +18,7 @@ from .utils import polar_plot
 import numpy as np
 
 
-def hist(x, bins=30, normalize=False):
+def hist(x, bins=30, normalize=False, ax=None):
     """
     Plot a histogram of x.
 
@@ -31,9 +31,10 @@ def hist(x, bins=30, normalize=False):
     normalize : bool
         If True, normalize the histogram (density=True).
     """
-    _, _, _ = plt.hist(x, bins=bins, density=normalize)
-    ax = plt.gca()
-    fig = plt.gcf()
+    if ax is None:
+        _, ax = plt.subplots()
+    _, _, _ = ax.hist(x, bins=bins, density=normalize)
+    fig = ax.figure
     # plt.show()
     return ax, fig
 
@@ -174,7 +175,9 @@ def plot_phase_polar_population(
     hist_density=False,
     scatter_s=10,
     show_legend=True,
-
+    xtick_fontsize=20,
+    n_phase_ticks=6,
+    ax=None,
 ):
     """
     Plot phase population on a polar plot, with adaptive inner ring for histograms.
@@ -234,6 +237,9 @@ def plot_phase_polar_population(
         inner_ring_size=rorigin_value,
         show_rlabels=show_rlabels,
         show_grid=show_grid,
+        xtick_fontsize=xtick_fontsize,
+        n_phase_ticks=n_phase_ticks,
+        ax=ax,
     )
 
     fig = ax.figure
@@ -323,7 +329,7 @@ def plot_phase_polar_population(
     ax.set_title(f"{title or 'Phase Population'}", va="bottom")
     if plot_type == "histogram":
         if show_legend:
-            ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1))
+            ax.legend(loc="upper right")
     fig.tight_layout()
     return fig, ax
 
@@ -338,6 +344,7 @@ def plot_polar_histogram(
     show_grid=True,
     hist_density=False,
     alpha=0.6,
+    ax=None,
 ):
     """
     Plot a single phase population histogram on a polar plot.
@@ -381,6 +388,7 @@ def plot_polar_histogram(
         inner_ring_size=rorigin_value,
         show_rlabels=show_rlabels,
         show_grid=show_grid,
+        ax=ax,
     )
     fig = ax.figure
 
@@ -396,5 +404,5 @@ def plot_polar_histogram(
 
     # --- Final Touches ---
     ax.set_title(f"{title or 'Phase Population'}", va="bottom")
-    fig.tight_layout()
+    # fig.tight_layout()
     return fig, ax

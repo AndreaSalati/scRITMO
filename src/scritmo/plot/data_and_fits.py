@@ -48,6 +48,117 @@ def bin_data(
     return bin_centers, binned_expr
 
 
+# def plot_circadian_data(
+#     adata,
+#     phis,
+#     g,
+#     ax=None,
+#     layer="spliced",
+#     n_bins=None,
+#     alpha=0.7,
+#     s=1,
+#     log_bin_y=False,
+#     jitter=0.0,
+#     c=None,
+# ):
+#     """
+#     Plot expression values of a gene over circadian phase.
+
+#     Parameters
+#     ----------
+#     adata : AnnData
+#         Annotated data matrix.
+#     phis : array-like
+#         Array of circadian phases (in radians).
+#     g : str
+#         Gene name to plot.
+#     ax : matplotlib.axes.Axes or None
+#         Axis to plot on. If None, a new figure and axis are created.
+#     layer : str
+#         Layer in `adata.layers` to extract expression from.
+#     n_bins : int or None
+#         Number of bins for aggregating expression. If None, raw points are plotted.
+#     alpha : float
+#         Transparency of scatter points.
+#     s : float
+#         Size of scatter points.
+#     log_bin_y : bool
+#         If True, log-transform the binned expression values.
+#     jitter : float
+#         Standard deviation of Gaussian noise added to phase values (in hours) for visual separation.
+#     """
+#     if ax is None:
+#         fig, ax = plt.subplots()
+
+#     phi_x = np.linspace(0, 2 * np.pi, 100)
+
+#     # Get expression values
+#     if layer is None:
+#         expression = adata[:, g].X
+#     else:
+#         expression = adata[:, g].layers[layer]
+
+#     try:
+#         expression = expression.toarray().squeeze()
+#     except AttributeError:
+#         expression = expression.squeeze()
+
+#     if n_bins is not None:
+#         # Bin the data
+#         bin_edges = np.linspace(0, 2 * np.pi, n_bins + 1)
+#         bin_indices = np.digitize(phis, bin_edges) - 1
+#         # Wrap around for circular data
+#         bin_indices[bin_indices == n_bins] = 0
+
+#         # Calculate the center of each bin
+#         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+#         # Calculate mean expression for each bin
+#         binned_expr = np.zeros(n_bins)
+#         for i in range(n_bins):
+#             # Check if there are data points in this bin
+#             if np.sum(bin_indices == i) > 0:
+#                 binned_expr[i] = np.mean(expression[bin_indices == i])
+#             else:
+#                 binned_expr[i] = np.nan  # No data in this bin
+
+#         # Plot binned data
+#         valid_bins = ~np.isnan(binned_expr)
+#         if log_bin_y:
+#             binned_expr[valid_bins] = np.log(binned_expr[valid_bins])
+#         ax.scatter(
+#             bin_centers[valid_bins] * rh,
+#             binned_expr[valid_bins],
+#             s=s,
+#             alpha=alpha,
+#             label="binned data",
+#             marker="o",
+#         )
+#     else:
+#         x = (phis * rh) + np.random.normal(0, jitter, size=phis.shape)
+#         # Plot original data points
+#         ax.scatter(
+#             x,
+#             expression,
+#             s=s,
+#             label="data",
+#             alpha=alpha,
+#             c=c,
+#         )
+
+#     # Plot details
+#     plt.title(f"{g}")
+#     ax.set_xlabel("Circadian phase")
+#     ax.set_ylabel("Normalized expression")
+#     ax.legend()
+
+#     return ax
+
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+
 def plot_circadian_data(
     adata,
     phis,
@@ -60,99 +171,71 @@ def plot_circadian_data(
     log_bin_y=False,
     jitter=0.0,
     c=None,
+    boxplot=False,  # New parameter
 ):
-    """
-    Plot expression values of a gene over circadian phase.
-
-    Parameters
-    ----------
-    adata : AnnData
-        Annotated data matrix.
-    phis : array-like
-        Array of circadian phases (in radians).
-    g : str
-        Gene name to plot.
-    ax : matplotlib.axes.Axes or None
-        Axis to plot on. If None, a new figure and axis are created.
-    layer : str
-        Layer in `adata.layers` to extract expression from.
-    n_bins : int or None
-        Number of bins for aggregating expression. If None, raw points are plotted.
-    alpha : float
-        Transparency of scatter points.
-    s : float
-        Size of scatter points.
-    log_bin_y : bool
-        If True, log-transform the binned expression values.
-    jitter : float
-        Standard deviation of Gaussian noise added to phase values (in hours) for visual separation.
-    """
     if ax is None:
         fig, ax = plt.subplots()
 
-    w = 2 * np.pi / 24
-    rh = w**-1
-    phi_x = np.linspace(0, 2 * np.pi, 100)
-
     # Get expression values
-    if layer is None:
-        expression = adata[:, g].X
-    else:
-        expression = adata[:, g].layers[layer]
-
+    expression = adata[:, g].layers[layer] if layer else adata[:, g].X
     try:
         expression = expression.toarray().squeeze()
     except AttributeError:
         expression = expression.squeeze()
 
-    if n_bins is not None:
-        # Bin the data
+    # Factor to convert radians to hours (assuming 24h cycle)
+    rh = 24 / (2 * np.pi)
+
+    if boxplot:
+        # 1. Group expression by unique phase values
+        df = pd.DataFrame({"phi": phis * rh, "expr": expression})
+        groups = df.groupby("phi")["expr"].apply(list)
+
+        # 2. Extract positions (x-values) and data (y-values)
+        positions = groups.index.values
+        data = groups.values
+
+        # 3. Plot using the actual numerical values as positions
+        ax.boxplot(data, positions=positions, widths=0.5, manage_ticks=False)
+
+        # 4. Clean up the ticks: Show only a few representative hours (e.g., every 4h)
+        ax.set_xticks(np.arange(0, 25, 4))
+        ax.set_xlim(-0.5, 24.5)  # Ensure the full cycle is visible
+
+    elif n_bins is not None:
         bin_edges = np.linspace(0, 2 * np.pi, n_bins + 1)
         bin_indices = np.digitize(phis, bin_edges) - 1
-        # Wrap around for circular data
         bin_indices[bin_indices == n_bins] = 0
-
-        # Calculate the center of each bin
         bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
 
-        # Calculate mean expression for each bin
-        binned_expr = np.zeros(n_bins)
-        for i in range(n_bins):
-            # Check if there are data points in this bin
-            if np.sum(bin_indices == i) > 0:
-                binned_expr[i] = np.mean(expression[bin_indices == i])
-            else:
-                binned_expr[i] = np.nan  # No data in this bin
+        binned_expr = np.array(
+            [
+                (
+                    np.mean(expression[bin_indices == i])
+                    if np.any(bin_indices == i)
+                    else np.nan
+                )
+                for i in range(n_bins)
+            ]
+        )
 
-        # Plot binned data
         valid_bins = ~np.isnan(binned_expr)
-        if log_bin_y:
-            binned_expr[valid_bins] = np.log(binned_expr[valid_bins])
+        y_vals = (
+            np.log(binned_expr[valid_bins]) if log_bin_y else binned_expr[valid_bins]
+        )
+
         ax.scatter(
-            bin_centers[valid_bins] * rh,
-            binned_expr[valid_bins],
-            s=s,
-            alpha=alpha,
-            label="binned data",
-            marker="o",
+            bin_centers[valid_bins] * rh, y_vals, s=s, alpha=alpha, label="binned data"
         )
     else:
         x = (phis * rh) + np.random.normal(0, jitter, size=phis.shape)
-        # Plot original data points
-        ax.scatter(
-            x,
-            expression,
-            s=s,
-            label="data",
-            alpha=alpha,
-            c=c,
-        )
+        ax.scatter(x, expression, s=s, alpha=alpha, c=c, label="data")
 
-    # Plot details
-    plt.title(f"{g}")
-    ax.set_xlabel("Circadian phase")
+    ax.set_title(f"{g}")
+    ax.set_xlabel("Circadian phase (hours)")
     ax.set_ylabel("Normalized expression")
-    ax.legend()
+    if not boxplot:
+        ax.legend()
 
     return ax
 
@@ -173,6 +256,7 @@ def plot_circadian_data_and_fit(
     s=10,
     jitter=0.0,
     c=None,
+    boxplot=False,  # New parameter
 ):
     """
     Creates a plot of circadian expression data and GLM fit, returning an axis object.
@@ -210,11 +294,10 @@ def plot_circadian_data_and_fit(
         s=s,
         jitter=jitter,
         c=c,
+        boxplot=boxplot,
     )
 
     # Now add the GLM fit
-    w = 2 * np.pi / 24
-    rh = w**-1
     phi_x = np.linspace(0, 2 * np.pi, 100)
 
     params_g = Beta(params_g)

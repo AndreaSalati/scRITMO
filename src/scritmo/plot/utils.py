@@ -7,11 +7,12 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from adjustText import adjust_text
 import seaborn as sns
 from scipy.stats import vonmises
-from statannotations.Annotator import Annotator
 
 
-def xy(color="red", linestyle="--", legend_label=""):
-    plt.axline(
+def xy(color="red", linestyle="--", legend_label="", ax=None):
+    if ax is None:
+        ax = plt.gca()
+    ax.axline(
         (0, 0),
         slope=1,
         color=color,
@@ -101,34 +102,36 @@ def scatter_with_labels(
     x,
     y,
     labels,
+    ax=None,
     fontsize=10,
     arrowstyle="-",
     color_arr="black",
     adjust=True,
+    scatter=False,
 ):
     """
-    Plots a scatter and annotates it with non-overlapping labels.
-
-    Args:
-        x (array-like): x-coordinates
-        y (array-like): y-coordinates
-        labels (array-like): list of strings for annotation
-        fontsize (int): font size of the labels
-        s (int): scatter marker size
+    Plots a scatter and annotates it with non-overlapping labels on a specific ax.
     """
+    if ax is None:
+        ax = plt.gca()
+
+    # Create the scatter plot
+    if scatter:
+        ax.scatter(x, y)
+
     texts = []
     for xi, yi, label in zip(x, y, labels):
-        texts.append(plt.text(xi, yi, label, fontsize=fontsize))
+        texts.append(ax.text(xi, yi, label, fontsize=fontsize))
 
     if adjust:
+        # adjust_text needs the ax to calculate overlaps correctly
         adjust_text(
-            texts, arrowprops=dict(arrowstyle=arrowstyle, color=color_arr, lw=0.5)
+            texts,
+            ax=ax,
+            arrowprops=dict(arrowstyle=arrowstyle, color=color_arr, lw=0.5),
         )
-    else:
 
-        # annotate
-        for i, label in enumerate(labels):
-            plt.text(x[i], y[i], label, fontsize=fontsize)
+    return ax
 
 
 def integrated_histo(v, tr_vec, normalize=True):
@@ -259,142 +262,99 @@ def hexbin_with_marginals(
     return ax_joint
 
 
-def plot_annotated_comparison(
-    data: pd.DataFrame,
-    x: str,
-    y: str,
-    hue: str,
-    plot_type: str = "bar",
-    show_points: bool = False,
-    estimator=np.mean,
-    test: str = "t-test_ind",
-    text_format: str = "star",
-    loc: str = "outside",
-    rotation: int = 45,
-    ax=None,
-    verbose_annoations: bool = False,
-    annotate_values: bool = False,
-    **plot_kwargs,
+def adjust_polar_text(
+    df,
+    theta_col,
+    r_col,
+    ax,
+    label_col=None,
+    fontsize=9,
+    arrowprops=dict(arrowstyle="-", color="black", lw=0.5),
+    **kwargs,
 ):
     """
-    Creates a seaborn barplot or boxplot comparing two groups within a hue category
-    and adds statistical annotations between them.
+    Robustly adjusts text on a polar plot by projecting to a Cartesian grid
+    that matches the EXACT physical dimensions of the target subplot.
     """
+    # 1. Extract Data
+    r = df[r_col].values
+    theta = df[theta_col].values
+    labels = df.index if label_col is None else df[label_col].values
 
-    # --- 1. Validate Hue and Define Orders ---
-    hue_values = sorted(data[hue].unique())
-    if len(hue_values) != 2:
-        raise ValueError(
-            f"Hue column '{hue}' must have exactly 2 unique values, found: {hue_values}"
+    # 2. Project to Cartesian (North=0, Clockwise)
+    x_cart = r * np.sin(theta)
+    y_cart = r * np.cos(theta)
+
+    # --- THE CRITICAL FIX ---
+    # Calculate the actual size of subplot 'ax' in inches
+    # ax.get_position() returns relative bbox (0-1). We multiply by figure size.
+    bbox = ax.get_position()
+    fig_width, fig_height = ax.figure.get_size_inches()
+
+    # Dimensions in inches (with a small safety floor to prevent 0-size errors)
+    width_inch = max(bbox.width * fig_width, 1.0)
+    height_inch = max(bbox.height * fig_height, 1.0)
+
+    # 3. Create Dummy Figure with the CORRECT scaled size
+    # Now adjust_text will struggle with space just like the real plot,
+    # forcing it to find better positions.
+    fig_temp, ax_temp = plt.subplots(figsize=(width_inch, height_inch))
+
+    # Match limits to preserve aspect ratio / density
+    limit = max(r) * 1.5
+    ax_temp.set_xlim(-limit, limit)
+    ax_temp.set_ylim(-limit, limit)
+
+    # Plot invisible obstacles
+    scat_size = kwargs.pop("s", 50)
+    scat = ax_temp.scatter(x_cart, y_cart, s=scat_size, color="red", alpha=0)
+
+    texts_temp = []
+    for x, y, label in zip(x_cart, y_cart, labels):
+        # Pre-Alignment Logic
+        ha = "left" if x >= 0 else "right"
+        va = "bottom" if y >= 0 else "top"
+
+        # Pass fontsize so algorithm knows real text collision size
+        texts_temp.append(ax_temp.text(x, y, label, ha=ha, va=va, fontsize=fontsize))
+
+    # 4. Run adjust_text
+    adjust_text(
+        texts_temp,
+        ax=ax_temp,
+        add_objects=[scat],
+        **kwargs,
+    )
+
+    # 5. Map Back to Polar and Plot
+    adjusted_texts = []
+    for i, t in enumerate(texts_temp):
+        x_adj, y_adj = t.get_position()
+
+        # Convert Cartesian back to Polar
+        r_adj = np.sqrt(x_adj**2 + y_adj**2)
+        theta_adj = np.arctan2(x_adj, y_adj)
+
+        # Add text to real axis
+        new_text = ax.text(
+            theta_adj,
+            r_adj,
+            t.get_text(),
+            ha=t.get_horizontalalignment(),
+            va=t.get_verticalalignment(),
+            fontsize=fontsize,
+            zorder=100,
         )
-    if hue == x:
-        x = hue + " "
-        data[x] = "value"
+        adjusted_texts.append(new_text)
 
-    # We explicitly define the order to ensure consistency between the plot and the annotator
-    order = sorted(data[x].unique())
-    hue_order = hue_values
-
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(8, 6))
-
-    # --- 2. Create the Plot ---
-    if plot_type == "bar":
-        ax = sns.barplot(
-            data=data,
-            x=x,
-            y=y,
-            hue=hue,
-            estimator=estimator,
-            ax=ax,
-            order=order,
-            hue_order=hue_order,
-            **plot_kwargs,
-        )
-
-        if annotate_values:
-            for bar in ax.patches:
-                height = bar.get_height()
-                if np.isnan(height):
-                    continue
-                ax.annotate(
-                    f"{height:.2f}",
-                    (bar.get_x() + bar.get_width() / 2, height),
-                    ha="center",
-                    va="bottom",
-                    fontsize=10,
-                    xytext=(0, 3),
-                    textcoords="offset points",
-                )
-
-    elif plot_type == "box":
-        ax = sns.boxplot(
-            data=data,
-            x=x,
-            y=y,
-            hue=hue,
-            ax=ax,
-            order=order,
-            hue_order=hue_order,
-            **plot_kwargs,
-        )
-
-        if show_points:
-            sns.stripplot(
-                data=data,
-                x=x,
-                y=y,
-                hue=hue,
-                ax=ax,
-                dodge=True,
-                color="black",
-                alpha=0.6,
-                jitter=True,
-                size=4,
-                order=order,
-                hue_order=hue_order,
+        if arrowprops is not None:
+            ax.annotate(
+                "",
+                xy=(theta[i], r[i]),
+                xytext=(theta_adj, r_adj),
+                arrowprops=arrowprops,
+                zorder=99,
             )
 
-            # Clean up legend (remove duplicates from stripplot)
-            handles, labels = ax.get_legend_handles_labels()
-            if len(labels) > 2:
-                ax.legend(handles[:2], labels[:2], title=hue)
-
-    else:
-        raise ValueError("plot_type must be 'bar' or 'box'")
-
-    plt.setp(ax.get_xticklabels(), rotation=rotation)
-
-    # --- 3. Define Pairs for Annotation ---
-    # The pairs must be formatted as ((x_cat, hue_val1), (x_cat, hue_val2))
-    pairs = [
-        ((category, hue_values[0]), (category, hue_values[1])) for category in order
-    ]
-
-    # --- 4. Add Statistical Annotations ---
-    # CRITICAL FIX: We must pass 'plot' to Annotator so it handles the hue nesting correctly
-    sa_plot_type = "barplot" if plot_type == "bar" else "boxplot"
-
-    annotator = Annotator(
-        ax,
-        pairs=pairs,
-        data=data,
-        x=x,
-        y=y,
-        hue=hue,
-        order=order,
-        hue_order=hue_order,
-        plot=sa_plot_type,
-    )
-
-    annotator.configure(
-        test=test, text_format=text_format, loc=loc, verbose=verbose_annoations
-    )
-
-    try:
-        annotator.apply_and_annotate()
-    except Exception as e:
-        print(f"Error during annotation: {e}")
-        raise e
-
-    return ax
+    plt.close(fig_temp)
+    return adjusted_texts
