@@ -108,7 +108,8 @@ def create_model_labels(group, n_groups):
 
     partitions = list(generate_partitions(list(group_indices)))
 
-    labels = []
+    labels = {}
+    counter = 1
 
     # 2. Iterate exactly as the matrix generator does
     for p in partitions:
@@ -140,7 +141,8 @@ def create_model_labels(group, n_groups):
 
             # Combine all parts of the model
             # e.g. "WT=Rhythmic, KO=Flat"
-            labels.append(", ".join(cluster_labels))
+            labels[counter] = ", ".join(cluster_labels)
+            counter += 1
 
     return labels
 

@@ -172,6 +172,8 @@ def plot_circadian_data(
     jitter=0.0,
     c=None,
     boxplot=False,  # New parameter
+    rasterized=True,  # New parameter for rasterization
+    remove_outliers=False,  # New parameter to remove outliers
 ):
     if ax is None:
         fig, ax = plt.subplots()
@@ -228,8 +230,16 @@ def plot_circadian_data(
             bin_centers[valid_bins] * rh, y_vals, s=s, alpha=alpha, label="binned data"
         )
     else:
+        if remove_outliers:
+            # remove 1% of large outliers for better visualization
+            threshold = np.percentile(expression, 99)
+            mask = expression <= threshold
+            expression = expression[mask]
+            phis = phis[mask]
         x = (phis * rh) + np.random.normal(0, jitter, size=phis.shape)
-        ax.scatter(x, expression, s=s, alpha=alpha, c=c, label="data")
+        ax.scatter(
+            x, expression, s=s, alpha=alpha, c=c, label="data", rasterized=rasterized
+        )
 
     ax.set_title(f"{g}")
     ax.set_xlabel("Circadian phase (hours)")
@@ -257,6 +267,8 @@ def plot_circadian_data_and_fit(
     jitter=0.0,
     c=None,
     boxplot=False,  # New parameter
+    rasterized=True,  # New parameter for rasterization
+    remove_outliers=False,  # New parameter to remove outliers
 ):
     """
     Creates a plot of circadian expression data and GLM fit, returning an axis object.
@@ -295,6 +307,8 @@ def plot_circadian_data_and_fit(
         jitter=jitter,
         c=c,
         boxplot=boxplot,
+        rasterized=rasterized,
+        remove_outliers=remove_outliers,
     )
 
     # Now add the GLM fit
@@ -322,3 +336,36 @@ def plot_circadian_data_and_fit(
     ax.legend()
 
     return ax
+
+
+def get_binned_stats(x, y, n_bins=10, log_bin_y=False):
+    """
+    Bins y values based on x-axis intervals and returns bin centers
+    and mean y values per bin.
+    """
+    # Define edges and calculate centers
+    bin_edges = np.linspace(x.min(), x.max(), n_bins + 1)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+    # Assign each x to a bin index
+    # -1 to make it 0-indexed; clip to ensure max value stays in last bin
+    bin_indices = np.digitize(x, bin_edges) - 1
+    bin_indices = np.clip(bin_indices, 0, n_bins - 1)
+
+    # Calculate mean per bin
+    binned_y = np.array(
+        [
+            y[bin_indices == i].mean() if np.any(bin_indices == i) else np.nan
+            for i in range(n_bins)
+        ]
+    )
+
+    # Filter out empty bins
+    valid_mask = ~np.isnan(binned_y)
+    final_x = bin_centers[valid_mask]
+    final_y = binned_y[valid_mask]
+
+    if log_bin_y:
+        final_y = np.log(final_y)
+
+    return final_x, final_y

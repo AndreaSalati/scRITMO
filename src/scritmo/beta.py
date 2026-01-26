@@ -783,6 +783,7 @@ def plot_beta_shift(
     line_color="gray",
     title="Beta comparison",
     polar_plot_args=None,
+    ax=None,
 ):
     """
     Compare two Beta objects on a polar plot.
@@ -820,7 +821,7 @@ def plot_beta_shift(
     if genes is None:
         genes = list(set(beta_1.index).intersection(beta_2.index))
 
-    ax = polar_plot(title=title, **polar_plot_args)
+    ax = polar_plot(title=title, ax=ax, **polar_plot_args)
 
     for j, gene in enumerate(genes):
         if gene not in beta_1.index or gene not in beta_2.index:
