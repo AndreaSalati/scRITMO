@@ -174,6 +174,7 @@ def plot_circadian_data(
     boxplot=False,  # New parameter
     rasterized=True,  # New parameter for rasterization
     remove_outliers=False,  # New parameter to remove outliers
+    label="data",
 ):
     if ax is None:
         fig, ax = plt.subplots()
@@ -225,9 +226,23 @@ def plot_circadian_data(
         y_vals = (
             np.log(binned_expr[valid_bins]) if log_bin_y else binned_expr[valid_bins]
         )
+        x_vals = bin_centers[valid_bins] * rh
 
-        ax.scatter(
-            bin_centers[valid_bins] * rh, y_vals, s=s, alpha=alpha, label="binned data"
+        # ax.plot(
+        #     bin_centers[valid_bins] * rh,
+        #     y_vals,
+        #     s=s,
+        #     alpha=alpha,
+        #     label=label,
+        # )
+        ax.plot(
+            x_vals,
+            y_vals,
+            marker="o",
+            markersize=np.sqrt(s),
+            alpha=alpha,
+            label=label,
+            c=c,
         )
     else:
         if remove_outliers:
@@ -236,9 +251,10 @@ def plot_circadian_data(
             mask = expression <= threshold
             expression = expression[mask]
             phis = phis[mask]
+
         x = (phis * rh) + np.random.normal(0, jitter, size=phis.shape)
         ax.scatter(
-            x, expression, s=s, alpha=alpha, c=c, label="data", rasterized=rasterized
+            x, expression, s=s, alpha=alpha, c=c, label=label, rasterized=rasterized
         )
 
     ax.set_title(f"{g}")

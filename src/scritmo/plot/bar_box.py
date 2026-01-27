@@ -278,10 +278,11 @@ def plot_dual_layer(
         )
         current_labels = [lbl.get_text() for lbl in ax.get_xticklabels()]
         new_labels = [mapping.get(lbl, lbl) for lbl in current_labels]
-        ax.set_xticklabels(new_labels, rotation=rotation, ha="center")
+        ax.set_xticklabels(new_labels, ha="center")
 
     # remvove x label
     ax.set_xlabel("")
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=rotation)
 
     return ax
 

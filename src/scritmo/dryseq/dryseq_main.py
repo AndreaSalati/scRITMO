@@ -72,7 +72,7 @@ def dryseq(count_data, group, time, period=24, n_cores=4):
             row = {
                 "gene": gene,
                 "chosen_model": chosen_idx + 1,  # 1-based index to match R
-                "choesen_model_label": model_labels[int(chosen_idx + 1)],
+                "chosen_model_label": model_labels[int(chosen_idx + 1)],
                 "chosen_model_BICW": chosen_bicw,
             }
 
