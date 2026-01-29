@@ -304,13 +304,16 @@ def plot_dual_layer(
         if palette is None:
             raise ValueError("palette must be provided when color_col is specified")
 
-        # Create Lookup Maps for Coloring
-        x_to_color_cat = (
-            modified_data[[x, color_col]]
-            .drop_duplicates()
-            .set_index(x)[color_col]
-            .to_dict()
-        )
+        # Handle edge case: x is the same as color_col
+        if color_col == original_x:
+            x_to_color_cat = {cat: cat for cat in order}
+        else:
+            x_to_color_cat = (
+                modified_data[[x, color_col]]
+                .drop_duplicates()
+                .set_index(x)[color_col]
+                .to_dict()
+            )
 
         # Iterate and Repaint
         for patch in ax.patches:
