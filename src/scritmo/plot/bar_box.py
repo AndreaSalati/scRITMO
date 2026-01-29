@@ -26,8 +26,7 @@ def plot_annotated_comparison(
     **plot_kwargs,
 ):
     """
-    Creates a seaborn barplot or boxplot comparing two groups within a hue category
-    and adds statistical annotations between them.
+    OLD! use plot_dual_layer instead.
     """
 
     # --- 1. Validate Hue and Define Orders ---
@@ -159,7 +158,7 @@ def adjust_lightness(color, amount=0.5):
     return colorsys.hls_to_rgb(c[0], max(0, min(1, amount * c[1])), c[2])
 
 
-def update_xtick_labels(ax, data, x_col, label_col, rotation=45):
+def update_xtick_labels(ax, data, x_col, label_col, rotation=45, xticks_fontsize=12):
     """
     Renames x-axis tick labels using a mapping from the dataframe.
     """
@@ -177,7 +176,9 @@ def update_xtick_labels(ax, data, x_col, label_col, rotation=45):
     new_labels = [mapping.get(lbl, lbl) for lbl in current_labels]
 
     # 3. Update the axes
-    ax.set_xticklabels(new_labels, rotation=rotation, ha="center")
+    ax.set_xticklabels(
+        new_labels, rotation=rotation, ha="center", fontsize=xticks_fontsize
+    )
 
 
 def plot_dual_layer(
@@ -185,19 +186,43 @@ def plot_dual_layer(
     x,
     y,
     hue,
-    color_col,
-    palette,
+    color_col=None,  # Now optional: None disables dual-layer coloring
+    palette=None,  # Optional unless color_col is used
     kind="box",
     ax=None,
     hue_order=None,
     order=None,
-    light_factor=1.2,
-    dark_factor=0.6,
+    light_factor=1.6,
+    dark_factor=1,
     xticks_col=None,
+    xticks_fontsize=12,
     rotation=45,
     show_color_legend=True,
+    add_pvalues=False,
+    test="t-test_ind",
+    text_format="star",
+    loc="outside",
+    verbose_annotations=False,
+    annotate_values=False,
+    show_points=False,
     **kwargs,
 ):
+    """
+    Universal plotting function: box/bar plots with optional dual-layer coloring
+    and optional statistical annotations.
+
+    Parameters
+    ----------
+    color_col : str or None
+        If str, enables dual-layer coloring (base color by color_col, lightness by hue).
+        If None, uses standard seaborn coloring (palette applies to hue).
+    palette : dict or seaborn palette
+        If color_col is set: mapping of color_col categories to colors.
+        If color_col is None: passed directly to seaborn (e.g., 'Set2', dict, list).
+    add_pvalues : bool
+        If True, adds significance brackets between hue groups within each x category.
+    Other parameters : see plot_annotated_comparison and previous plot_dual_layer
+    """
     if ax is None:
         ax = plt.gca()
 
@@ -207,198 +232,229 @@ def plot_dual_layer(
     if hue_order is None:
         hue_order = sorted(data[hue].unique())
 
+    # Validation for statistical annotations
+    if add_pvalues and len(hue_order) != 2:
+        raise ValueError(
+            f"When add_pvalues=True, hue column '{hue}' must have exactly 2 unique values, "
+            f"found: {hue_order}"
+        )
+
+    # Handle edge case where x == hue
+    original_x = x
+    modified_data = data.copy()
+    if hue == x:
+        x = hue + "_x"
+        modified_data[x] = modified_data[original_x].copy()
+
     # 2. Draw the Base Plot
     plot_func = sns.boxplot if kind == "box" else sns.barplot
 
-    plot_func(
-        data=data, x=x, y=y, hue=hue, order=order, hue_order=hue_order, ax=ax, **kwargs
+    # When color_col is None, pass palette to seaborn normally
+    # When color_col is set, we handle colors manually, so don't pass palette to seaborn
+    plot_palette = None if color_col is not None else palette
+
+    ax = plot_func(
+        data=modified_data,
+        x=x,
+        y=y,
+        hue=hue,
+        order=order,
+        hue_order=hue_order,
+        ax=ax,
+        palette=plot_palette,  # Only used when color_col is None
+        **kwargs,
     )
 
-    # 3. Create Lookup Maps for Coloring
-    x_to_color_cat = (
-        data[[x, color_col]].drop_duplicates().set_index(x)[color_col].to_dict()
-    )
+    # Add strip plot for boxplots if requested
+    if kind == "box" and show_points:
+        sns.stripplot(
+            data=modified_data,
+            x=x,
+            y=y,
+            hue=hue,
+            ax=ax,
+            dodge=True,
+            color="black",
+            alpha=0.6,
+            jitter=True,
+            size=4,
+            order=order,
+            hue_order=hue_order,
+            legend=False,
+        )
 
-    # 4. Iterate and Repaint (Coloring Logic)
-    for patch in ax.patches:
-        # Determine X Center (Rectangle vs PathPatch)
-        if hasattr(patch, "get_x"):
-            x_center = patch.get_x() + patch.get_width() / 2
-        else:
-            extents = patch.get_path().get_extents()
-            x_center = (extents.xmin + extents.xmax) / 2
+    # Annotate values for bar plots
+    if kind == "bar" and annotate_values:
+        for bar in ax.patches:
+            height = bar.get_height()
+            if np.isnan(height):
+                continue
+            ax.annotate(
+                f"{height:.2f}",
+                (bar.get_x() + bar.get_width() / 2, height),
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                xytext=(0, 3),
+                textcoords="offset points",
+            )
 
-        x_idx = int(round(x_center))
+    # 3. DUAL-LAYER COLORING (Only if color_col is specified)
+    if color_col is not None:
+        if palette is None:
+            raise ValueError("palette must be provided when color_col is specified")
 
-        if 0 <= x_idx < len(order):
-            current_x_cat = order[x_idx]
-            current_color_cat = x_to_color_cat.get(current_x_cat)
-            base_color = palette.get(current_color_cat, "grey")
+        # Create Lookup Maps for Coloring
+        x_to_color_cat = (
+            modified_data[[x, color_col]]
+            .drop_duplicates()
+            .set_index(x)[color_col]
+            .to_dict()
+        )
 
-            # Left (Hue 0) vs Right (Hue 1)
-            if x_center < x_idx:
-                new_color = adjust_lightness(base_color, light_factor)
+        # Iterate and Repaint
+        for patch in ax.patches:
+            # Determine X Center (Rectangle vs PathPatch)
+            if hasattr(patch, "get_x"):
+                x_center = patch.get_x() + patch.get_width() / 2
             else:
-                new_color = adjust_lightness(base_color, dark_factor)
+                extents = patch.get_path().get_extents()
+                x_center = (extents.xmin + extents.xmax) / 2
 
-            patch.set_facecolor(new_color)
-            if kind == "bar":
-                patch.set_edgecolor("black")
-                patch.set_linewidth(1)
+            x_idx = int(round(x_center))
 
-    # 5. Handle Custom Legend
+            if 0 <= x_idx < len(order):
+                current_x_cat = order[x_idx]
+                current_color_cat = x_to_color_cat.get(current_x_cat)
+                base_color = palette.get(current_color_cat, "grey")
+
+                # Left (Hue 0) vs Right (Hue 1)
+                if x_center < x_idx:
+                    new_color = adjust_lightness(base_color, light_factor)
+                else:
+                    new_color = adjust_lightness(base_color, dark_factor)
+
+                patch.set_facecolor(new_color)
+                if kind == "bar":
+                    patch.set_edgecolor("black")
+                    patch.set_linewidth(1)
+
+    # 4. STATISTICAL ANNOTATIONS
+    if add_pvalues:
+        pairs = [
+            ((category, hue_order[0]), (category, hue_order[1])) for category in order
+        ]
+
+        sa_plot_type = "barplot" if kind == "bar" else "boxplot"
+
+        annotator = Annotator(
+            ax,
+            pairs=pairs,
+            data=modified_data,
+            x=x,
+            y=y,
+            hue=hue,
+            order=order,
+            hue_order=hue_order,
+            plot=sa_plot_type,
+        )
+
+        annotator.configure(
+            test=test, text_format=text_format, loc=loc, verbose=verbose_annotations
+        )
+
+        try:
+            annotator.apply_and_annotate()
+        except Exception as e:
+            print(f"Error during statistical annotation: {e}")
+            raise e
+
+    # 5. LEGEND HANDLING
     if ax.get_legend():
         ax.get_legend().remove()
 
-    legend_elements = [
-        Line2D([0], [0], color="gray", lw=4, label=f"{hue_order[0]}"),
-        Line2D([0], [0], color="black", lw=4, label=f"{hue_order[1]}"),
-        # Line2D([0], [0], color="white", label=""),
-    ]
-    if show_color_legend:
-        for cat_name, col in palette.items():
-            legend_elements.append(
-                Line2D(
-                    [0],
-                    [0],
-                    marker="s",
-                    color="w",
-                    markerfacecolor=col,
-                    markersize=10,
-                    label=cat_name,
-                )
-            )
-    ax.legend(handles=legend_elements, loc="best")
+    legend_elements = []
 
-    # 6. Rename X-Ticks (New Feature)
+    if color_col is not None:
+        # Dual-layer mode: Show hue indicators (light/dark) + color categories
+        legend_elements.extend(
+            [
+                Line2D([0], [0], color="gray", lw=4, label=f"{hue_order[0]}"),
+                Line2D([0], [0], color="black", lw=4, label=f"{hue_order[1]}"),
+            ]
+        )
+        if show_color_legend:
+            for cat_name, col in palette.items():
+                legend_elements.append(
+                    Line2D(
+                        [0],
+                        [0],
+                        marker="s",
+                        color="w",
+                        markerfacecolor=col,
+                        markersize=10,
+                        label=cat_name,
+                    )
+                )
+    else:
+        # Standard mode: Reconstruct standard hue legend
+        # Try to get colors from the plot or use default
+        try:
+            # For standard plots, recreate hue legend manually or let seaborn handle it
+            # We'll create simple color patches for each hue category
+            if isinstance(plot_palette, dict):
+                for h in hue_order:
+                    legend_elements.append(
+                        Line2D(
+                            [0],
+                            [0],
+                            marker="s",
+                            color="w",
+                            markerfacecolor=plot_palette.get(h),
+                            markersize=10,
+                            label=h,
+                        )
+                    )
+            else:
+                # Use default seaborn colors or provided palette name
+                for i, h in enumerate(hue_order):
+                    legend_elements.append(
+                        Line2D(
+                            [0],
+                            [0],
+                            marker="s",
+                            color="w",
+                            markerfacecolor=f"C{i}",
+                            markersize=10,
+                            label=h,
+                        )
+                    )
+        except:
+            # Fallback: just use text labels if color detection fails
+            for h in hue_order:
+                legend_elements.append(Line2D([0], [0], color="gray", lw=0, label=h))
+
+    if legend_elements:
+        ax.legend(
+            handles=legend_elements,
+            loc="best",
+            title=hue if color_col is None else None,
+        )
+
+    # 6. X-TICKS RENAMING
     if xticks_col is not None:
-        # We reuse the logic from the standalone function here
         mapping = (
-            data[[x, xticks_col]].drop_duplicates().set_index(x)[xticks_col].to_dict()
+            modified_data[[x, xticks_col]]
+            .drop_duplicates()
+            .set_index(x)[xticks_col]
+            .to_dict()
         )
         current_labels = [lbl.get_text() for lbl in ax.get_xticklabels()]
         new_labels = [mapping.get(lbl, lbl) for lbl in current_labels]
-        ax.set_xticklabels(new_labels, ha="center")
+        ax.set_xticklabels(new_labels, ha="center", fontsize=xticks_fontsize)
 
-    # remvove x label
+    # Cleanup
     ax.set_xlabel("")
     ax.set_xticklabels(ax.get_xticklabels(), rotation=rotation)
 
     return ax
-
-
-# def plot_dual_layer(
-#     data,
-#     x,
-#     y,
-#     hue,
-#     color_col,
-#     palette,
-#     kind="box",
-#     ax=None,
-#     hue_order=None,
-#     order=None,
-#     light_factor=1.4,
-#     dark_factor=0.8,
-#     **kwargs,
-# ):
-#     """
-#     Plots a seaborn box or bar plot where:
-#     - x, y: Standard axes
-#     - hue: Binary variable (controls Left/Right position & Light/Dark intensity)
-#     - color_col: Categorical variable (controls the Base Hue/Color)
-#     """
-#     if ax is None:
-#         ax = plt.gca()
-
-#     # 1. Enforce Order
-#     # We must know the order of X and Hue to map the patches correctly
-#     if order is None:
-#         order = sorted(data[x].unique())
-#     if hue_order is None:
-#         hue_order = sorted(data[hue].unique())
-
-#     # Validate hue is binary
-#     if len(hue_order) != 2:
-#         raise ValueError(
-#             f"The 'hue' column must have exactly 2 categories. Found: {hue_order}"
-#         )
-
-#     # 2. Draw the Base Plot
-#     plot_func = sns.boxplot if kind == "box" else sns.barplot
-
-#     # We pass hue=hue to get the dodging (spacing), but we ignore the default colors
-#     plot_func(
-#         data=data, x=x, y=y, hue=hue, order=order, hue_order=hue_order, ax=ax, **kwargs
-#     )
-
-#     # 3. Create Lookup Maps
-#     # specific_map: Maps 'ContextName' -> 'Organ'
-#     # We drop duplicates to get a unique mapping for the x-axis
-#     x_to_color_cat = (
-#         data[[x, color_col]].drop_duplicates().set_index(x)[color_col].to_dict()
-#     )
-
-#     # 4. Iterate and Repaint
-#     # Supported patch types: Rectangle (Bar/Box old) or PathPatch (Box new)
-#     for patch in ax.patches:
-
-#         # A. Get X Center (Robust to patch type)
-#         if hasattr(patch, "get_x"):  # Rectangle
-#             x_center = patch.get_x() + patch.get_width() / 2
-#         else:  # PathPatch
-#             extents = patch.get_path().get_extents()
-#             x_center = (extents.xmin + extents.xmax) / 2
-
-#         # B. Identify X-Axis Category (Integer Index)
-#         x_idx = int(round(x_center))
-
-#         # Safety check: ensure we are within bounds of the data we plotted
-#         if 0 <= x_idx < len(order):
-#             current_x_cat = order[x_idx]
-
-#             # C. Retrieve Base Color
-#             current_color_cat = x_to_color_cat.get(current_x_cat)
-#             base_color = palette.get(current_color_cat, "grey")
-
-#             # D. Apply Logic: Left (Hue 0) vs Right (Hue 1)
-#             # If center is to the left of the integer tick -> First Hue Category
-#             if x_center < x_idx:
-#                 new_color = adjust_lightness(base_color, light_factor)
-#             else:
-#                 new_color = adjust_lightness(base_color, dark_factor)
-
-#             patch.set_facecolor(new_color)
-
-#             # Optional: For barplots, you might want to set edgecolor to match or black
-#             if kind == "bar":
-#                 patch.set_edgecolor("black")
-#                 patch.set_linewidth(1)
-
-#     # 5. Generate Custom Legend
-#     # Clear existing legend (which shows wrong colors)
-#     if ax.get_legend():
-#         ax.get_legend().remove()
-
-#     legend_elements = [
-#         Line2D([0], [0], color="gray", lw=4, label=f"{hue_order[0]}"),
-#         Line2D([0], [0], color="black", lw=4, label=f"{hue_order[1]}"),
-#         # Line2D([0], [0], color="white", label=""),  # Spacer
-#     ]
-
-#     for cat_name, col in palette.items():
-#         legend_elements.append(
-#             Line2D(
-#                 [0],
-#                 [0],
-#                 marker="s",
-#                 color="w",
-#                 markerfacecolor=col,
-#                 markersize=10,
-#                 label=cat_name,
-#             )
-#         )
-
-#     ax.legend(handles=legend_elements, loc="best")
-
-#     return ax
