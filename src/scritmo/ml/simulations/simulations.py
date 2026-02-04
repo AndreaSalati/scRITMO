@@ -14,8 +14,7 @@ from scipy.sparse import csr_matrix
 import scritmo as sr
 from scritmo import w, rh, ccg
 import seaborn as sns
-from context_repo import context_model
-from context_repo import trainer
+from .. import trainer
 
 import contextlib
 import io
