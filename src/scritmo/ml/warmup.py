@@ -30,6 +30,8 @@ def warmup_and_train(
     k_batch=None,
     # model init
     k_beta=None,
+    # unspliced parameters
+    rhythmic_degradation=True,
     # training
     pretrain_epochs=0,
     pretrain_batch_size=128,
@@ -115,6 +117,7 @@ def warmup_and_train(
         mp["fixed_prior"] = fixed_prior
 
     mp["k_beta"] = k_beta
+    mp["rhythmic_degradation"] = rhythmic_degradation
 
     if fixed_cell_phases is not None:
         mp["fixed_cell_phases"] = fixed_cell_phases
