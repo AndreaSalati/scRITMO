@@ -28,6 +28,7 @@ dependencies = [
     "numpy>=1.26.0",   
     "pandas>=2.1.0",   
     "patsy>=1.0.1",
+    "pydeseq2>=0.4.0",
     "scanpy>=1.10.0",
     "scikit-learn>=1.4.0",
     "scipy>=1.11.0",

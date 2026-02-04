@@ -12,7 +12,7 @@ from scipy.sparse import csr_matrix
 import scritmo as sr
 from scritmo import w, rh, ccg
 import seaborn as sns
-from context_repo import trainer
+from .. import trainer
 from tqdm import tqdm
 import numpy as np
 from torch import tensor as tt
@@ -46,7 +46,7 @@ def _infer_phases_for_context(
     """
     Performs phase inference and returns structured results as a list of dictionaries.
     """
-    from context_repo import ContextModel
+    from ..context_model import ContextModel
 
     N_cell_ct, N_genes_ct = generated_data.shape
     data_c = torch.tensor(generated_data, dtype=torch.float32, device=device)

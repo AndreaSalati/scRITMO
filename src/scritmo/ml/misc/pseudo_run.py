@@ -12,8 +12,10 @@ import scritmo as sr
 
 # here w converts h in radians, rh the inverse
 from scritmo import w, rh, ccg, pseudobulk
-from context_repo import ContextModel, train_deterministic_tempo, assemble_mp
-from context_repo import MI
+from ..context_model import ContextModel
+from ..utils import assemble_mp
+from ..discrete_MI import MI
+# TODO: train_deterministic_tempo function not found in the codebase, may need to be implemented or imported from elsewhere
 
 
 def run_pseudobulk(

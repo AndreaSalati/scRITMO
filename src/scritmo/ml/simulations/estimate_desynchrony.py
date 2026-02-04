@@ -10,7 +10,7 @@ from scipy.sparse import csr_matrix
 import scritmo as sr
 from scritmo import w, rh, ccg
 
-from context_repo import trainer
+from .. import trainer
 from tqdm import tqdm
 from torch import tensor as tt
 from functools import partial
