@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "scritmo"
 version = "0.1.0"
-description = "A suite of useful function for single cell and rhythic analysis"
+description = "A suite of useful function for single cell and rhythmic analysis"
 authors = [
   { name = "Andrea Salati", email = "andrea.salati96@gmail.com" }
 ]
@@ -18,6 +18,8 @@ classifiers = [
 ]
 
 requires-python = ">=3.11" 
+
+# CORE dependencies only (no torch)
 dependencies = [
     "adjustText>=1.3.0",
     "anndata>=0.12.7",
@@ -34,3 +36,21 @@ dependencies = [
     "statsmodels>=0.14.1",
     "tqdm>=4.67.1",
 ]
+
+[project.optional-dependencies]
+# ML extras - heavy stuff
+ml = [
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+]
+
+# Dev gets everything
+dev = [
+    "pytest>=7.0",
+    "black",
+    "jupyter",
+    "scritmo[ml]",  # Dev installs include ML
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/scritmo"
