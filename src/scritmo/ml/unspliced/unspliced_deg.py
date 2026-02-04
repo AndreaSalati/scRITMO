@@ -26,9 +26,7 @@ class UnsplicedMixin:
         init_log_k_splice = 0.8 * torch.ones(self.Ng, device=self.dev, dtype=torch.float32)
         self.log_k_splice_g = nn.Parameter(init_log_k_splice)
 
-        # --- 2. Degradation Amplitude (Epsilon / A_gamma) ---
-        # User requested relative amplitude epsilon between 0 and 1.
-        # Since degradation rates are usually < 1.0 (e.g. 0.17 for 4h half-life),
+        # --- 2. Degradation relative Amplitude (Epsilon / A_gamma) ---
         # 0-1 is a safe range for the amplitude A_gamma.
         self.raw_epsilon_gamma = nn.Parameter(
             -2.0 * torch.ones(self.Ng, device=self.dev, dtype=torch.float32)
