@@ -8,6 +8,81 @@ from sklearn.preprocessing import OneHotEncoder
 from functools import partial
 from .marginalization import MarginalizationMixin
 
+
+# JIT-compiled helper functions for performance
+@torch.jit.script
+def compute_nb_params(E_xcg: torch.Tensor, disp: torch.Tensor, counts: torch.Tensor, eps: float = 1e-6) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    JIT-compiled Negative Binomial parameter computation.
+    
+    Args:
+        E_xcg: Expected mean values (before exp transform)
+        disp: Dispersion parameter
+        counts: Library size counts
+        eps: Epsilon for numerical stability
+    
+    Returns:
+        r: Total count parameter
+        p: Success probability parameter (clamped)
+    """
+    E_xcg_exp = torch.exp(E_xcg) * counts
+    r = 1.0 / disp
+    p = disp * E_xcg_exp / (1.0 + disp * E_xcg_exp)
+    p = p.clamp(min=eps, max=1.0 - eps)
+    return r, p
+
+
+@torch.jit.script
+def compute_poisson_rate(E_xcg: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
+    """JIT-compiled Poisson rate computation."""
+    return torch.exp(E_xcg) * counts
+
+
+@torch.jit.script  
+def model_formula_core(
+    X: torch.Tensor,
+    dm: torch.Tensor,
+    m_yg: torch.Tensor,
+    m_g: torch.Tensor,
+    log_lambda_y: torch.Tensor,
+    log_amp: torch.Tensor,
+    acrophase: torch.Tensor,
+    log_disp: torch.Tensor,
+    fix_disp_val: str,
+    log_amp_fn: str,
+    max_amp: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    JIT-compiled core model formula computation.
+    
+    Returns:
+        E_xcg: Expected mean values
+        disp: Dispersion values
+    """
+    # Compute intercept and lambda
+    intercept_cg = torch.matmul(dm, m_yg) + m_g
+    lambda_cg = torch.matmul(dm, torch.exp(log_lambda_y))
+    
+    # Compute dispersion
+    disp = torch.exp(log_disp)
+    if fix_disp_val == "context":
+        disp = torch.matmul(dm, disp)
+    
+    # Compute amplitude and phase (beta coefficients)
+    if log_amp_fn == "logit":
+        amp = torch.sigmoid(log_amp) * max_amp
+    else:  # log
+        amp = torch.exp(log_amp)
+    
+    cos = amp * torch.cos(acrophase).unsqueeze(0)
+    sin = amp * torch.sin(acrophase).unsqueeze(0)
+    ab = torch.cat([cos, sin], dim=0)
+    
+    # Compute expected mean
+    E_xcg = (X @ ab) * lambda_cg + intercept_cg
+    
+    return E_xcg, disp
+
 import anndata
 import pandas as pd
 from .utils import harmonic_dm_torch, circ_std_P, set_context_mode, nmp
@@ -580,19 +655,14 @@ class ContextModel(
 
         # --- Select distribution based on the noise model ---
         if self.noise_model == "nb":
-            E_xcg = torch.exp(E_xcg) * counts
-            # Negative Binomial distribution
-            r = 1 / disp
-            eps = 1e-6
-            p = disp * E_xcg / (1 + disp * E_xcg)
-            p = p.clamp(min=eps, max=1 - eps)
-
+            # Use JIT-compiled NB parameter computation
+            r, p = compute_nb_params(E_xcg, disp, counts)
             return torch.distributions.NegativeBinomial(total_count=r, probs=p)
 
         elif self.noise_model == "poisson":
-            E_xcg = torch.exp(E_xcg) * counts
-            # Poisson distribution, where the rate is the expected mean
-            return torch.distributions.Poisson(rate=E_xcg)
+            # Use JIT-compiled Poisson rate computation
+            rate = compute_poisson_rate(E_xcg, counts)
+            return torch.distributions.Poisson(rate=rate)
 
         elif self.noise_model == "gaussian":
             # Gaussian distribution with mean E_xcg and fixed std dev
