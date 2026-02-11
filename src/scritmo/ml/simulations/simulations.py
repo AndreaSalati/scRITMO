@@ -15,6 +15,7 @@ import scritmo as sr
 from scritmo import w, rh, ccg
 import seaborn as sns
 from .. import trainer
+from scritmo.ml import context_model
 
 import contextlib
 import io
@@ -333,7 +334,7 @@ def get_simulation_results_indep_pop(
         mp_tmp["counts"] = mp["counts"][i]
         phi_sim_tmp = phi_sim[i]
         data_c_tmp = data_c[:, i, :]
-        cmodel = context_model.ContextModel(
+        cmodel = context_model.context_model.ContextModel(
             mp_tmp, data_c_tmp, context_mode=context_mode
         )
         cmodel.to(device)

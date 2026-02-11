@@ -9,7 +9,6 @@ from functools import partial
 from .marginalization import MarginalizationMixin
 
 import anndata
-
 import pandas as pd
 from .utils import harmonic_dm_torch, circ_std_P, set_context_mode, nmp
 from .misc.power_spherical.power_spherical import (
