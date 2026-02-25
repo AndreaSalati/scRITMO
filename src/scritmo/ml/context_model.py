@@ -107,6 +107,7 @@ from .ensemble import EnsembleMixin
 from .unspliced.unspliced_deg import UnsplicedMixin
 from .unspliced.fisher import FisherUncertaintyMixin
 from .analysis_utils import create_results_dataframe, desync_results, desync_means
+from .genome_fit_mixin import GenomeFitMixin
 
 circSTD = partial(cSTD, adjust=True)
 
@@ -117,6 +118,7 @@ class ContextModel(
     UnsplicedMixin,
     MarginalizationMixin,
     FisherUncertaintyMixin,
+    GenomeFitMixin,
 ):
     """
     A deterministic model that uses Simpson's rule for integration
