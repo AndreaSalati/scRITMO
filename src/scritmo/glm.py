@@ -217,7 +217,7 @@ def glm_gene_fit(
 
         data.layers[layer] = data.layers["sum"]
         # data_c = data[:, genes].layers[layer]
-        phases = data.obs["ZTmod"].values * w
+        phases = data.obs["ZTmod"].astype(float).values * w
         outlier_threshold = 100.0  # no outlier removal in pseudobulk
 
     if genes is None:

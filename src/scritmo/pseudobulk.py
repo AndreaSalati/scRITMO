@@ -80,7 +80,7 @@ def pseudobulk(
     groupby_obs_list: Sequence[str],
     n_replicates: int = 1,
     pseudobulk_layer: str = "spliced",
-    keep_obs: Sequence[str] = ("ZT", "ZTmod"),
+    keep_obs: Sequence[str] = (),
 ) -> AnnData:
     """
     Creates a pseudobulk AnnData object, with an option to create pseudo-replicates.
@@ -174,5 +174,3 @@ def pseudobulk(
             del adata.obs[replicate_col]
 
     return pb
-
-

@@ -39,7 +39,8 @@ class GenomeFitMixin:
     def fit_genome_wide(
         self,
         adata_new: anndata.AnnData,
-        posteriors_c: np.ndarray,
+        posteriors_c: Optional[np.ndarray] = None,
+        adata_predictors: Optional[anndata.AnnData] = None,
         gene_chunk_size: int = 1000,
         optimizer: str = "LBFGS",
         max_iter: int = 100,
@@ -51,7 +52,7 @@ class GenomeFitMixin:
         n_theta: Optional[int] = None,
         device: Optional[str] = None,
         use_wls_init: bool = True,
-    ) -> pd.DataFrame:
+    ) -> Beta:
         """
         Fit genome-wide gene parameters using frozen phase posteriors.
 
@@ -72,9 +73,14 @@ class GenomeFitMixin:
         ----------
         adata_new : anndata.AnnData
             AnnData object containing the new genes to fit. Shape: (Nc, Ng_genome)
-        posteriors_c : np.ndarray
-            Frozen phase posteriors from predictor genes. Shape: (Nc, N_theta) or (N_theta, Nc)
+        posteriors_c : np.ndarray, optional
+            Frozen phase posteriors from predictor genes. Shape: (Nc, N_theta) or (N_theta, Nc).
             These are P_c(theta) values that sum to 1 along the theta axis.
+            If not provided, will be computed internally using adata_predictors.
+        adata_predictors : anndata.AnnData, optional
+            AnnData object containing the predictor genes used to compute phase posteriors.
+            Only needed if posteriors_c is not provided. Should contain the same cells
+            as adata_new and the predictor genes used to train the model.
         gene_chunk_size : int, default 1000
             Number of genes to process in each chunk to avoid memory issues.
         optimizer : str, default "LBFGS"
@@ -112,12 +118,43 @@ class GenomeFitMixin:
             - amp: amplitude (pre-computed)
             - phase: phase in radians
             - disp: dispersion parameter
+
+        Examples
+        --------
+        # Simple usage: compute posteriors internally
+        result = cmodel.fit_genome_wide(
+            adata_new=adata_genome,  # genes to fit
+            adata_predictors=adata_predictor_genes,  # genes for phase inference
+        )
+
+        # Advanced: provide pre-computed posteriors
+        posteriors = cmodel.get_phase_posteriors(data_c)
+        result = cmodel.fit_genome_wide(
+            adata_new=adata_genome,
+            posteriors_c=posteriors,
+        )
         """
         if device is None:
             device = self.dev
 
         if n_theta is None:
             n_theta = self.Nx
+
+        # Compute posteriors if not provided
+        if posteriors_c is None:
+            if adata_predictors is None:
+                raise ValueError(
+                    "Either posteriors_c or adata_predictors must be provided. "
+                    "To compute posteriors internally, pass adata_predictors with the predictor genes. "
+                    "To use pre-computed posteriors, pass posteriors_c."
+                )
+            if show_progress:
+                print("Computing phase posteriors from predictor genes...")
+            posteriors_c = self._compute_posteriors_from_adata(
+                adata_predictors, layer=layer, n_theta=n_theta, device=device
+            )
+            if show_progress:
+                print(f"Posteriors computed: shape {posteriors_c.shape}")
 
         # Print timing and device info
         if show_progress:
@@ -725,13 +762,89 @@ class GenomeFitMixin:
 
         return params_beta
 
+    def _compute_posteriors_from_adata(
+        self,
+        adata: anndata.AnnData,
+        layer: Optional[str] = "spliced",
+        n_theta: Optional[int] = None,
+        device: str = "cpu",
+    ) -> np.ndarray:
+        """
+        Compute phase posteriors from predictor gene data.
+
+        This helper method prepares the data and calls get_phase_posteriors()
+        to compute the posterior distribution over phases for each cell.
+
+        Parameters
+        ----------
+        adata : anndata.AnnData
+            AnnData object containing the predictor genes. Must contain
+            the same predictor genes used to train the model.
+        layer : str, optional
+            Layer to use for expression data. Default "spliced".
+        n_theta : int, optional
+            Number of theta grid points. If None, uses self.Nx.
+        device : str
+            Device to use for computation.
+
+        Returns
+        -------
+        np.ndarray
+            Phase posteriors with shape (N_theta, Nc).
+        """
+        if n_theta is None:
+            n_theta = self.Nx
+
+        # Get the predictor genes used by the model
+        predictor_genes = getattr(self, "genes", None)
+        if predictor_genes is None:
+            raise ValueError(
+                "Model does not have 'genes' attribute. "
+                "Cannot determine which genes are predictor genes."
+            )
+
+        # Check that predictor genes are in adata
+        missing_genes = set(predictor_genes) - set(adata.var_names)
+        if missing_genes:
+            raise ValueError(
+                f"Missing predictor genes in adata: {missing_genes}. "
+                "Make sure adata_predictors contains all predictor genes."
+            )
+
+        # Get expression data for predictor genes
+        if layer is None:
+            data = adata[:, predictor_genes].X
+        else:
+            data = adata[:, predictor_genes].layers[layer]
+
+        if hasattr(data, "toarray"):
+            data = data.toarray()
+
+        # Create data tensor with shape (n_theta, Nc, Ng)
+        data_tensor = torch.tensor(data, dtype=torch.float32, device=device)
+        data_tensor = data_tensor.unsqueeze(0).expand(n_theta, -1, -1)
+
+        # Compute posteriors using the model's method
+        # This requires the model to have get_phase_posteriors method
+        if hasattr(self, "get_phase_posteriors"):
+            posteriors = self.get_phase_posteriors(
+                y=data_tensor, method="sum", n_theta=n_theta
+            )
+        else:
+            raise AttributeError(
+                "Model does not have get_phase_posteriors method. "
+                "This mixin must be used with a model that has this method."
+            )
+
+        return posteriors
+
     def fit_genome_wide_parallel(
         self,
         adata_new: anndata.AnnData,
-        posteriors_c: np.ndarray,
+        posteriors_c: Optional[np.ndarray] = None,
         n_jobs: int = -1,
         **kwargs,
-    ) -> pd.DataFrame:
+    ) -> Beta:
         """
         Fit genome-wide gene parameters in parallel using joblib.
 
