@@ -282,6 +282,7 @@ class Beta(pd.DataFrame):
         polar_plot_args={},
         ax=None,
         adjust_polar=False,
+        time_units="h",
     ):
         """
         Takes as input a pandas dataframe with columns "log2fc", "phase"
@@ -289,7 +290,7 @@ class Beta(pd.DataFrame):
         """
 
         # polar plot stuff
-        ax = polar_plot(title=title, ax=ax, **polar_plot_args)
+        ax = polar_plot(title=title, ax=ax, time_units=time_units, **polar_plot_args)
 
         if genes_to_plot is None:
             genes_to_plot = self.index
