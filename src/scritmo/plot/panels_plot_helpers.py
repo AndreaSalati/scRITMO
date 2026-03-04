@@ -9,10 +9,12 @@ import subprocess
 import os
 
 
-def labels_panels_mosaic(axs):
+def labels_panels_mosaic(axs, unbold=False):
     for i, (key, ax) in enumerate(sorted(axs.items())):
         # You can customize the letter list if keys aren't 'A', 'B', 'C'
         label = key  # Or string.ascii_uppercase[i]
+        if unbold:
+            label = label.lower()
         ax.text(
             -0.05,
             1.05,
@@ -98,3 +100,17 @@ def replace_mosaic_cell_with_grid(fig, axs, label, nrows, ncols):
     axs[label] = subaxes
 
     return axs
+
+
+import matplotlib
+
+
+def save_files(
+    fig, figure_name, path="/home/maxine/Documents/andrea/context_repo/plot/FIGURES/"
+):
+    matplotlib.rcParams["svg.fonttype"] = "none"
+    # optionally be explicit about font:
+    matplotlib.rcParams["font.family"] = "DejaVu Sans"
+
+    fig.savefig(path + figure_name + ".svg", format="svg")
+    # fig.savefig(path + figure_name + ".png", format="png", dpi=300)

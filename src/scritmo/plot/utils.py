@@ -32,6 +32,7 @@ def polar_plot(
     n_phase_ticks=6,
     xtick_fontsize=20,
     ax=None,
+    time_units="h",
 ):
     """
     This function configures and returns a polar ax object.
@@ -81,7 +82,14 @@ def polar_plot(
     # Set tick positions
     ax.set_xticks(np.linspace(0, 2 * np.pi, n_phase_ticks, endpoint=False))
     # Create labels
-    x_ticks_labels = [f"{int(i * 24 / n_phase_ticks)}h" for i in range(n_phase_ticks)]
+    if time_units == "h":
+        x_ticks_labels = [
+            f"{int(i * 24 / n_phase_ticks)}{time_units}" for i in range(n_phase_ticks)
+        ]
+    else:
+        x_ticks_labels = [
+            f"{time_units}{int(i * 24 / n_phase_ticks)}" for i in range(n_phase_ticks)
+        ]
     # Set labels with specified fontsize
     ax.set_xticklabels(x_ticks_labels, fontsize=xtick_fontsize)
 

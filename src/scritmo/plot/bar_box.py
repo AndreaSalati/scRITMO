@@ -24,6 +24,7 @@ def plot_annotated_comparison(
     ax=None,
     verbose_annoations: bool = False,
     annotate_values: bool = False,
+    showfliers: bool = False,
     **plot_kwargs,
 ):
     """
@@ -85,6 +86,7 @@ def plot_annotated_comparison(
             ax=ax,
             order=order,
             hue_order=hue_order,
+            showfliers=showfliers,
             **plot_kwargs,
         )
 
@@ -491,6 +493,7 @@ def plot_dual_layer_hatch(
     xticks_fontsize=12,
     rotation=45,
     show_color_legend=True,
+    remove_hatch_legend=False,
     add_pvalues=False,
     test="t-test_ind",
     text_format="star",
@@ -681,22 +684,24 @@ def plot_dual_layer_hatch(
     if color_col is not None:
         # Dual-layer mode: Show hue indicators (solid vs hatched) + color categories
         # Use light gray to show the pattern difference clearly
-        legend_elements.extend(
-            [
-                Patch(
-                    facecolor="lightgray",
-                    edgecolor="black",
-                    hatch="",
-                    label=f"{hue_order[0]}",
-                ),
-                Patch(
-                    facecolor="lightgray",
-                    edgecolor="black",
-                    hatch="///",
-                    label=f"{hue_order[1]}",
-                ),
-            ]
-        )
+        if not remove_hatch_legend:
+            legend_elements.extend(
+                [
+                    Patch(
+                        facecolor="lightgray",
+                        edgecolor="black",
+                        hatch="",
+                        label=f"{hue_order[0]}",
+                    ),
+                    Patch(
+                        facecolor="lightgray",
+                        edgecolor="black",
+                        hatch="///",
+                        label=f"{hue_order[1]}",
+                    ),
+                ]
+            )
+
         if show_color_legend:
             for cat_name, col in palette.items():
                 legend_elements.append(
@@ -782,21 +787,5 @@ def plot_dual_layer_hatch(
         )
 
     ax.set_xlabel("")
-
-    # # 6. X-TICKS RENAMING
-    # if xticks_col is not None:
-    #     mapping = (
-    #         modified_data[[x, xticks_col]]
-    #         .drop_duplicates()
-    #         .set_index(x)[xticks_col]
-    #         .to_dict()
-    #     )
-    #     current_labels = [lbl.get_text() for lbl in ax.get_xticklabels()]
-    #     new_labels = [mapping.get(lbl, lbl) for lbl in current_labels]
-    #     ax.set_xticklabels(new_labels, ha="center", fontsize=xticks_fontsize)
-
-    # # Cleanup
-    # ax.set_xlabel("")
-    # ax.set_xticklabels(ax.get_xticklabels(), rotation=rotation)
 
     return ax

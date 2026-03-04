@@ -1,8 +1,97 @@
 import torch
-from .misc.power_spherical.power_spherical import log_power_spherical_unnorm, log_von_mises
+from .misc.power_spherical.power_spherical import log_power_spherical_unnorm, log_von_mises, log_von_mises_jit
 import torch
 import matplotlib.pyplot as plt
 from .utils import nmp
+
+
+@torch.jit.script
+def vectorized_simpson_jit(y_values: torch.Tensor, h: float) -> torch.Tensor:
+    """
+    JIT-compiled vectorized Periodic Simpson's rule.
+    
+    Args:
+        y_values: Tensor of function values, shape (N, B)
+        h: Step size (uniform grid)
+    
+    Returns:
+        Integrals, shape (B,)
+    """
+    n_points = y_values.shape[0]
+    
+    if n_points < 2:
+        return torch.zeros(y_values.shape[1], dtype=y_values.dtype, device=y_values.device)
+    
+    # Create weights: [2, 4, 2, 4, ...] for periodic Simpson's rule
+    weights = torch.ones(n_points, dtype=y_values.dtype, device=y_values.device)
+    weights[1::2] = 4.0  # Odd indices
+    weights[0::2] = 2.0  # Even indices
+    
+    # Apply weights and sum
+    weighted_y = y_values * weights.unsqueeze(1)
+    integrals = (h / 3.0) * torch.sum(weighted_y, dim=0)
+    
+    return integrals
+
+
+@torch.jit.script
+def marginalize_theta_core(
+    ll_xc: torch.Tensor,
+    log_prior: torch.Tensor,
+    ll_e_xc: torch.Tensor,
+    phi_x: torch.Tensor,
+    method: str,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    JIT-compiled core marginalization computation.
+    
+    Returns:
+        l_c: Marginalized likelihood
+        max_c: Max values for log-sum-exp
+        l_xc: Exponentiated likelihoods
+    """
+    # Add prior and extra term
+    ll_xc_combined = ll_xc + log_prior + ll_e_xc
+    
+    # Log-sum-exp trick
+    max_c = torch.max(ll_xc_combined, dim=0, keepdim=True).values
+    ll_xc_stable = ll_xc_combined - max_c
+    l_xc = torch.exp(ll_xc_stable)
+    
+    # Integration
+    if method == "simpson":
+        h = 2.0 * 3.141592653589793 / float(ll_xc.shape[0])  # 2*pi/Nx
+        l_c = vectorized_simpson_jit(l_xc, h)
+    else:  # sum
+        l_c = torch.sum(l_xc, dim=0) * (2.0 * 3.141592653589793 / float(ll_xc.shape[0]))
+    
+    return l_c, max_c, l_xc
+
+
+@torch.jit.script
+def normalize_log_dist_jit(ll_xc: torch.Tensor, method: str, Nx: int) -> torch.Tensor:
+    """
+    JIT-compiled log distribution normalization.
+    
+    Args:
+        ll_xc: Log likelihood tensor, shape (Nx, ...)
+        method: "simpson" or "sum"
+        Nx: Number of grid points
+    
+    Returns:
+        Normalized distribution
+    """
+    max_c = torch.max(ll_xc, dim=0, keepdim=True).values
+    ll_xc_stable = ll_xc - max_c
+    l_xc = torch.exp(ll_xc_stable)
+    
+    if method == "simpson":
+        h = 2.0 * 3.141592653589793 / float(Nx)
+        l_c = vectorized_simpson_jit(l_xc, h)
+    else:  # sum
+        l_c = torch.sum(l_xc, dim=0) * (2.0 * 3.141592653589793 / float(Nx))
+    
+    return l_xc / l_c
 
 class MarginalizationMixin:
     @staticmethod
@@ -37,29 +126,16 @@ class MarginalizationMixin:
             )
 
         # 2. Calculate step size (assuming uniform grid)
-        # This is more direct than calculating from the endpoints for a periodic grid.
         h = x_values[1] - x_values[0]
 
-        # 3. Create weights for Periodic Simpson's rule: [2, 4, 2, 4, ...]
-        weights = torch.ones(n_points, device=y_values.device, dtype=y_values.dtype)
-        weights[1::2] = 4.0  # All odd indices are 4
-        weights[0::2] = 2.0  # All even indices are 2
-
-        # Apply weights to y values. The unsqueeze adapts the weights for broadcasting.
-        # y_values shape: (n_points, B)
-        # weights shape: (n_points,) -> unsqueeze(1) -> (n_points, 1)
-        weighted_y = y_values * weights.unsqueeze(1)
-
-        # Calculate the integral by summing weighted values and scaling
-        integrals = (h / 3.0) * torch.sum(weighted_y, dim=0)
-
-        return integrals
+        # Use JIT-compiled version for the core computation
+        return vectorized_simpson_jit(y_values, float(h))
 
 
     def marginalize_theta(
         self, ll_xc_, log_prior, ll_e_xc, method="simpson", return_integrand=False
     ):
-        """
+        r"""
         This function gives the log pf the marginal distribution P(D, beta)
         by integrating over the theta, given a prior P(theta)
         \int P(D, beta, theta) P(theta) d theta = P(D, beta)
@@ -94,13 +170,15 @@ class MarginalizationMixin:
         if indices is None:
             indices = slice(None)
 
-        # if n_theta is not None:
-        #     dm = self.design_matrix(nmp.linspace(0, 2 * torch.pi, n_theta)).to(
-
         if self.batch_mode:
             dm = self.dm_batch[indices, :]
             kappa_b = torch.exp(self.kappa_b)
-            prior_xb = log_von_mises(self.phi_x.unsqueeze(1), self.phi_b, kappa_b)
+            # Use JIT-compiled version when kappa_b is a scalar float
+            if isinstance(kappa_b, torch.Tensor) and kappa_b.numel() == 1:
+                kappa_val = float(kappa_b.item())
+                prior_xb = log_von_mises_jit(self.phi_x.unsqueeze(1), self.phi_b, kappa_val)
+            else:
+                prior_xb = log_von_mises(self.phi_x.unsqueeze(1), self.phi_b, kappa_b)
             # than expand by mutiplying by the dm prior_xb
             prior_xc = prior_xb @ dm.T
 
@@ -117,7 +195,7 @@ class MarginalizationMixin:
 
 
     def marginalize_theta_svi(self, ll_xcg, method="simpson", return_integrand=False):
-        """
+        r"""
         This function gives the log pf the marginal distribution P(D, beta)
         by integrating over the theta, given a  flat prior P(theta) = 1 / (2 * pi)
         \int P(D, beta, theta) P(theta) d theta = P(D, beta)

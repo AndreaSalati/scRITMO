@@ -178,6 +178,7 @@ def plot_phase_polar_population(
     xtick_fontsize=20,
     n_phase_ticks=6,
     ax=None,
+    legend_title="",
 ):
     """
     Plot phase population on a polar plot, with adaptive inner ring for histograms.
@@ -329,8 +330,11 @@ def plot_phase_polar_population(
     ax.set_title(f"{title or 'Phase Population'}", va="bottom")
     if plot_type == "histogram":
         if show_legend:
-            ax.legend(loc="upper right")
-    fig.tight_layout()
+            ax.legend(
+                loc="upper right",
+                title=legend_title,
+            )
+    # fig.tight_layout()
     return fig, ax
 
 
@@ -345,6 +349,7 @@ def plot_polar_histogram(
     hist_density=False,
     alpha=0.6,
     ax=None,
+    xtick_fontsize=20,
 ):
     """
     Plot a single phase population histogram on a polar plot.
@@ -389,6 +394,7 @@ def plot_polar_histogram(
         show_rlabels=show_rlabels,
         show_grid=show_grid,
         ax=ax,
+        xtick_fontsize=xtick_fontsize,
     )
     fig = ax.figure
 
