@@ -106,7 +106,12 @@ from .simulations.simulate_populations import simulate_cell_populations
 from .ensemble import EnsembleMixin
 from .unspliced.unspliced_deg import UnsplicedMixin
 from .unspliced.fisher import FisherUncertaintyMixin
-from .analysis_utils import create_results_dataframe, desync_results, desync_means
+from .analysis_utils import (
+    create_results_dataframe,
+    desync_results,
+    desync_means,
+    desync_results_posterior,
+)
 from .genome_fit_mixin import GenomeFitMixin
 
 circSTD = partial(cSTD, adjust=True)
@@ -442,6 +447,7 @@ class ContextModel(
         self.post_var_c = post_var_c
         self.mle_c = log_mle_c / self.Ng
         self.post_mode_c = compute_posterior_mode(posterior_xc)
+        self.posterior_xc = posterior_xc  # full (Nx, Nc) posterior array
 
         return post_mean_c
 
@@ -692,6 +698,7 @@ class ContextModel(
         n_replicates=None,
         library_size_vec=None,
         n_sim_runs=1,
+        return_posteriors=False,
     ):
         """
         Wrapper around the simulate_cell_populations function.
@@ -712,6 +719,7 @@ class ContextModel(
             n_replicates=n_replicates,
             library_size_vec=library_size_vec,
             n_sim_runs=n_sim_runs,
+            return_posteriors=return_posteriors,
         )
 
     def create_results_df(
@@ -766,6 +774,8 @@ class ContextModel(
         metrics: dict | None = None,
         n_replicates_real: int | None = None,
         seed: int = 42,
+        # --- Mode ---
+        mode: str = "point_estimate",
     ):
         """
         Orchestrates the estimation of phase desynchrony by:
@@ -795,7 +805,7 @@ class ContextModel(
 
         if context_col is None:
             context_col = "context"
-            if self.context_u.shape[0] == 1:
+            if len(self.context_u) == 1:
                 context_val = self.context_u[0]
                 adata.obs[context_col] = context_val
             else:
@@ -818,40 +828,125 @@ class ContextModel(
         )
         self.result_df = df_real
 
-        # 2. Simulate Cell Populations (Reference)
-        # Note: mapping 'ext_time_col' -> 'ext_time_label' and 'sample_col' -> 'sample_label'
-        df_sim = self.simulate_cell_populations(
-            adata=adata,
-            context_col=context_col,
-            n_cells=n_cells,
-            layer_to_use=layer,
-            ext_time_label=ext_time_col,
-            sample_label=sample_col,
-            kappa=np.inf,
-            period=period,
-            device=device,
-            return_sim_data=True,  # Forced to True to ensure we get the DF for step 3
-            n_epochs_training=n_epochs_training,
-            n_replicates=n_replicates_sim,
-            library_size_vec=library_size_vec,
-            n_sim_runs=n_sim_runs,
-        )
+        if mode == "point_estimate":
+            # 2a. Simulate (point estimates only)
+            df_sim = self.simulate_cell_populations(
+                adata=adata,
+                context_col=context_col,
+                n_cells=n_cells,
+                layer_to_use=layer,
+                ext_time_label=ext_time_col,
+                sample_label=sample_col,
+                kappa=np.inf,
+                period=period,
+                device=device,
+                return_sim_data=True,
+                n_epochs_training=n_epochs_training,
+                n_replicates=n_replicates_sim,
+                library_size_vec=library_size_vec,
+                n_sim_runs=n_sim_runs,
+            )
 
-        # 3. Compute Desynchrony
-        # Note: passing 'n_replicates_real' to the aggregation step
-        df_final = desync_results(
-            df_real=df_real,
-            df_sim=df_sim,
-            group_cols=group_cols,
-            disp_function=disp_function,
-            post_estimator=post_estimator,
-            metrics=metrics,
-            n_replicates=n_replicates_real,
-            seed=seed,
-            # ext_time_col=ext_time_col,
-        )
+            # 3a. Compute desynchrony from point estimates
+            df_final = desync_results(
+                df_real=df_real,
+                df_sim=df_sim,
+                group_cols=group_cols,
+                disp_function=disp_function,
+                post_estimator=post_estimator,
+                metrics=metrics,
+                n_replicates=n_replicates_real,
+                seed=seed,
+            )
+
+        elif mode == "posterior_mixture":
+            # Re-run inference on the provided adata to guarantee posterior_xc is
+            # aligned with it (handles loaded models that predate this feature).
+            self._infer_on_adata(adata, layer=layer, device=device)
+            real_posterior_xc = self.posterior_xc
+
+            # 2b. Simulate and return full posteriors
+            df_sim, sim_posteriors_dict = self.simulate_cell_populations(
+                adata=adata,
+                context_col=context_col,
+                n_cells=n_cells,
+                layer_to_use=layer,
+                ext_time_label=ext_time_col,
+                sample_label=sample_col,
+                kappa=np.inf,
+                period=period,
+                device=device,
+                return_sim_data=True,
+                n_epochs_training=n_epochs_training,
+                n_replicates=n_replicates_sim,
+                library_size_vec=library_size_vec,
+                n_sim_runs=n_sim_runs,
+                return_posteriors=True,
+            )
+
+            # 3b. Compute desynchrony from posterior mixtures
+            df_final = desync_results_posterior(
+                df_real=df_real,
+                real_posterior_xc=real_posterior_xc,
+                df_sim=df_sim,
+                sim_posteriors_dict=sim_posteriors_dict,
+                group_cols=group_cols,
+                n_replicates=n_replicates_real,
+                seed=seed,
+            )
+
+        else:
+            raise ValueError(
+                f"Unknown mode '{mode}'. Choose 'point_estimate' or 'posterior_mixture'."
+            )
 
         return df_final
+
+    def _infer_on_adata(self, adata, layer: str = "spliced", device: str = "cpu", n_theta: int = 100):
+        """
+        Run get_inferred_phases on an AnnData object, populating posterior_xc.
+
+        Used by estimate_phase_desynchrony(mode='posterior_mixture') to ensure
+        self.posterior_xc is aligned with the provided adata.
+
+        Parameters
+        ----------
+        adata : AnnData
+            Must contain all genes in self.genes (or a superset).
+        layer : str
+            Layer to use for count data.
+        device : str
+            Torch device.
+        n_theta : int
+            Phase grid resolution for posteriors.
+        """
+        import scipy.sparse
+
+        # Extract count matrix for model genes
+        missing = np.setdiff1d(self.genes, adata.var_names)
+        if len(missing) > 0:
+            raise ValueError(
+                f"adata is missing {len(missing)} model genes (e.g. {missing[:3]}). "
+                "Ensure adata contains all genes the model was trained on."
+            )
+        adata_sub = adata[:, self.genes]
+
+        if layer in adata_sub.layers:
+            X = adata_sub.layers[layer]
+        else:
+            X = adata_sub.X
+        if scipy.sparse.issparse(X):
+            X = X.toarray()
+        X = np.array(X, dtype=np.float32)
+
+        lib_sizes = X.sum(axis=1, keepdims=True).astype(np.float32)
+
+        data_c = torch.tensor(X, dtype=torch.float32, device=device)
+        data_c = data_c.unsqueeze(0).expand(n_theta, -1, -1)
+        counts_c = torch.tensor(lib_sizes, dtype=torch.float32, device=device)
+
+        self.to(device)
+        self.get_inferred_phases(data_c, n_theta=n_theta, counts=counts_c)
 
     def X_matrix(self, fixed_cell_mode, n_theta=None, mp=None):
 
