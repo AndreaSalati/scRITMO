@@ -776,6 +776,8 @@ class ContextModel(
         seed: int = 42,
         # --- Mode ---
         mode: str = "point_estimate",
+        # --- Cell filtering ---
+        post_std_threshold: float = np.inf,
     ):
         """
         Orchestrates the estimation of phase desynchrony by:
@@ -814,6 +816,11 @@ class ContextModel(
                     "Please specify the context_col argument."
                 )
 
+        # For posterior_mixture: run inference first so that post_std_c in df_real
+        # is always aligned with the passed adata (handles pre-trained loaded models).
+        if mode == "posterior_mixture":
+            self._infer_on_adata(adata, layer=layer, device=device)
+
         # 1. Generate Real Results DataFrame
         df_real = self.create_results_df(
             adata=adata,
@@ -827,6 +834,23 @@ class ContextModel(
             allow_flip=allow_flip,
         )
         self.result_df = df_real
+
+        # 1b. Filter cells by posterior uncertainty
+        if post_std_threshold < np.inf and "post_std_c" in df_real.columns:
+            mask = df_real["post_std_c"] <= post_std_threshold
+            n_before = len(df_real)
+            df_real = df_real[mask].copy()
+            cell_keep_idx = np.where(mask.values)[0]
+            print(
+                f"  post_std_threshold={post_std_threshold:.3f} rad: "
+                f"kept {len(df_real)}/{n_before} cells"
+            )
+            if len(df_real) == 0:
+                raise ValueError(
+                    f"post_std_threshold={post_std_threshold} filtered out all cells."
+                )
+        else:
+            cell_keep_idx = None
 
         if mode == "point_estimate":
             # 2a. Simulate (point estimates only)
@@ -860,10 +884,10 @@ class ContextModel(
             )
 
         elif mode == "posterior_mixture":
-            # Re-run inference on the provided adata to guarantee posterior_xc is
-            # aligned with it (handles loaded models that predate this feature).
-            self._infer_on_adata(adata, layer=layer, device=device)
+            # posterior_xc is already populated by _infer_on_adata called above
             real_posterior_xc = self.posterior_xc
+            if cell_keep_idx is not None:
+                real_posterior_xc = real_posterior_xc[:, cell_keep_idx]
 
             # 2b. Simulate and return full posteriors
             df_sim, sim_posteriors_dict = self.simulate_cell_populations(
@@ -979,3 +1003,6 @@ class ContextModel(
             X_tensor = harmonic_dm_torch(phi_x_tensor, self.nh, False)
             X_tensor = X_tensor.unsqueeze(1).expand(n_theta, self.Nc, self.nh * 2)
             return X_tensor
+
+
+
