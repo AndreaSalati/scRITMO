@@ -91,6 +91,7 @@ def _infer_phases_for_context(
     post_mean_c = model_y.post_mean_c
     post_std_c = model_y.post_std_c
     post_mode_c = model_y.post_mode_c
+    posterior_xc = model_y.posterior_xc if return_posteriors else None
 
     # Build the list of dictionaries
     # myabe call the utils function here create_results_dataframe
@@ -108,9 +109,12 @@ def _infer_phases_for_context(
             }
         )
 
+    # Explicit GPU cleanup to avoid accumulation across context iterations
+    del model_y, data_c
+    torch.cuda.empty_cache()
+
     if return_posteriors:
-        # model_y.posterior_xc is set by get_inferred_phases; shape (Nx, N_cells)
-        return results, model_y.posterior_xc
+        return results, posterior_xc
     return results
 
 
@@ -286,14 +290,20 @@ def simulate_cell_populations(
             columns=["post_mean", "post_mode", "post_std", "context", "sample_name"]
         )
         if return_posteriors:
-            return empty_df, {"posterior_xc": np.empty((0, 0)), "sample_name": [], "context": []}
+            return empty_df, {
+                "posterior_xc": np.empty((0, 0)),
+                "sample_name": [],
+                "context": [],
+            }
         return empty_df
 
     df = pd.DataFrame(all_results_list)
 
     if return_posteriors:
         posteriors_dict = {
-            "posterior_xc": np.concatenate(all_posteriors_list, axis=1),  # (Nx, N_total)
+            "posterior_xc": np.concatenate(
+                all_posteriors_list, axis=1
+            ),  # (Nx, N_total)
             "sample_name": all_posterior_sample_names,
             "context": all_posterior_contexts,
         }
