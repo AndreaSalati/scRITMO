@@ -4,38 +4,6 @@ import scipy
 from scipy.special import i0, i1
 
 
-@torch.jit.script
-def log_von_mises_jit(x: torch.Tensor, mu: torch.Tensor, kappa: float) -> torch.Tensor:
-    """
-    JIT-compiled log Von Mises distribution.
-    
-    Args:
-        x: Tensor of angles (any shape)
-        mu: Tensor of mean angles (broadcastable to x's shape)
-        kappa: scalar concentration parameter
-    
-    Returns:
-        Tensor of log-densities
-    """
-    # Compute log-normalization constant: log(2*pi) + log(I_0(kappa))
-    log_2pi = 1.8378770664093453  # log(2*pi) precomputed
-    kappa_t = torch.tensor(kappa, dtype=x.dtype, device=x.device)
-    log_I0 = torch.log(torch.i0(kappa_t))
-    logN = log_2pi + log_I0
-    
-    # Compute log-unnormalized term: kappa * cos(x - mu)
-    angle_diff = x - mu
-    log_unnorm = kappa_t * torch.cos(angle_diff)
-    
-    return log_unnorm - logN
-
-
-def powershperical2beta(k, d):
-    alpha = (d - 1) / 2 + k
-    beta = (d - 1) / 2
-    return alpha, beta
-
-
 def power_spherical(x: torch.Tensor, mu: torch.Tensor, k: float) -> torch.Tensor:
     """
     Torch‐version of the 2D power‐spherical distribution

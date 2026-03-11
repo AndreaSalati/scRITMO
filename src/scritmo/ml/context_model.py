@@ -1,88 +1,11 @@
 import numpy as np
 import torch
 from torch import tensor as tt
-import torch.jit
 from tqdm import tqdm
 from torch import nn
 from sklearn.preprocessing import OneHotEncoder
 from functools import partial
 from .marginalization import MarginalizationMixin
-
-
-# JIT-compiled helper functions for performance
-@torch.jit.script
-def compute_nb_params(E_xcg: torch.Tensor, disp: torch.Tensor, counts: torch.Tensor, eps: float = 1e-6) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    JIT-compiled Negative Binomial parameter computation.
-    
-    Args:
-        E_xcg: Expected mean values (before exp transform)
-        disp: Dispersion parameter
-        counts: Library size counts
-        eps: Epsilon for numerical stability
-    
-    Returns:
-        r: Total count parameter
-        p: Success probability parameter (clamped)
-    """
-    E_xcg_exp = torch.exp(E_xcg) * counts
-    r = 1.0 / disp
-    p = disp * E_xcg_exp / (1.0 + disp * E_xcg_exp)
-    p = p.clamp(min=eps, max=1.0 - eps)
-    return r, p
-
-
-@torch.jit.script
-def compute_poisson_rate(E_xcg: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
-    """JIT-compiled Poisson rate computation."""
-    return torch.exp(E_xcg) * counts
-
-
-@torch.jit.script  
-def model_formula_core(
-    X: torch.Tensor,
-    dm: torch.Tensor,
-    m_yg: torch.Tensor,
-    m_g: torch.Tensor,
-    log_lambda_y: torch.Tensor,
-    log_amp: torch.Tensor,
-    acrophase: torch.Tensor,
-    log_disp: torch.Tensor,
-    fix_disp_val: str,
-    log_amp_fn: str,
-    max_amp: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    JIT-compiled core model formula computation.
-    
-    Returns:
-        E_xcg: Expected mean values
-        disp: Dispersion values
-    """
-    # Compute intercept and lambda
-    intercept_cg = torch.matmul(dm, m_yg) + m_g
-    lambda_cg = torch.matmul(dm, torch.exp(log_lambda_y))
-    
-    # Compute dispersion
-    disp = torch.exp(log_disp)
-    if fix_disp_val == "context":
-        disp = torch.matmul(dm, disp)
-    
-    # Compute amplitude and phase (beta coefficients)
-    if log_amp_fn == "logit":
-        amp = torch.sigmoid(log_amp) * max_amp
-    else:  # log
-        amp = torch.exp(log_amp)
-    
-    cos = amp * torch.cos(acrophase).unsqueeze(0)
-    sin = amp * torch.sin(acrophase).unsqueeze(0)
-    ab = torch.cat([cos, sin], dim=0)
-    
-    # Compute expected mean
-    E_xcg = (X @ ab) * lambda_cg + intercept_cg
-    
-    return E_xcg, disp
-
 import anndata
 import pandas as pd
 from .utils import harmonic_dm_torch, circ_std_P, set_context_mode, nmp
@@ -106,8 +29,13 @@ from .simulations.simulate_populations import simulate_cell_populations
 from .ensemble import EnsembleMixin
 from .unspliced.unspliced_deg import UnsplicedMixin
 from .unspliced.fisher import FisherUncertaintyMixin
-from .analysis_utils import create_results_dataframe, desync_results, desync_means
-from .genome_fit_mixin import GenomeFitMixin
+from .analysis_utils import (
+    create_results_dataframe,
+    desync_results,
+    desync_means,
+    desync_results_posterior,
+)
+from .genome_fit import GenomeFitMixin
 
 circSTD = partial(cSTD, adjust=True)
 
@@ -442,6 +370,7 @@ class ContextModel(
         self.post_var_c = post_var_c
         self.mle_c = log_mle_c / self.Ng
         self.post_mode_c = compute_posterior_mode(posterior_xc)
+        self.posterior_xc = posterior_xc  # full (Nx, Nc) posterior array
 
         return post_mean_c
 
@@ -692,6 +621,7 @@ class ContextModel(
         n_replicates=None,
         library_size_vec=None,
         n_sim_runs=1,
+        return_posteriors=False,
     ):
         """
         Wrapper around the simulate_cell_populations function.
@@ -712,6 +642,7 @@ class ContextModel(
             n_replicates=n_replicates,
             library_size_vec=library_size_vec,
             n_sim_runs=n_sim_runs,
+            return_posteriors=return_posteriors,
         )
 
     def create_results_df(
@@ -766,6 +697,10 @@ class ContextModel(
         metrics: dict | None = None,
         n_replicates_real: int | None = None,
         seed: int = 42,
+        # --- Mode ---
+        mode: str = "point_estimate",
+        # --- Cell filtering ---
+        post_std_threshold: float = np.inf,
     ):
         """
         Orchestrates the estimation of phase desynchrony by:
@@ -795,7 +730,7 @@ class ContextModel(
 
         if context_col is None:
             context_col = "context"
-            if self.context_u.shape[0] == 1:
+            if len(self.context_u) == 1:
                 context_val = self.context_u[0]
                 adata.obs[context_col] = context_val
             else:
@@ -803,6 +738,11 @@ class ContextModel(
                     "context_col cannot be None as there are multiple possible contexts. "
                     "Please specify the context_col argument."
                 )
+
+        # For posterior_mixture: run inference first so that post_std_c in df_real
+        # is always aligned with the passed adata (handles pre-trained loaded models).
+        if mode == "posterior_mixture":
+            self._infer_on_adata(adata, layer=layer, device=device)
 
         # 1. Generate Real Results DataFrame
         df_real = self.create_results_df(
@@ -818,40 +758,144 @@ class ContextModel(
         )
         self.result_df = df_real
 
-        # 2. Simulate Cell Populations (Reference)
-        # Note: mapping 'ext_time_col' -> 'ext_time_label' and 'sample_col' -> 'sample_label'
-        df_sim = self.simulate_cell_populations(
-            adata=adata,
-            context_col=context_col,
-            n_cells=n_cells,
-            layer_to_use=layer,
-            ext_time_label=ext_time_col,
-            sample_label=sample_col,
-            kappa=np.inf,
-            period=period,
-            device=device,
-            return_sim_data=True,  # Forced to True to ensure we get the DF for step 3
-            n_epochs_training=n_epochs_training,
-            n_replicates=n_replicates_sim,
-            library_size_vec=library_size_vec,
-            n_sim_runs=n_sim_runs,
-        )
+        # 1b. Filter cells by posterior uncertainty
+        if post_std_threshold < np.inf and "post_std_c" in df_real.columns:
+            mask = df_real["post_std_c"] <= post_std_threshold
+            n_before = len(df_real)
+            df_real = df_real[mask].copy()
+            cell_keep_idx = np.where(mask.values)[0]
+            print(
+                f"  post_std_threshold={post_std_threshold:.3f} rad: "
+                f"kept {len(df_real)}/{n_before} cells"
+            )
+            if len(df_real) == 0:
+                raise ValueError(
+                    f"post_std_threshold={post_std_threshold} filtered out all cells."
+                )
+        else:
+            cell_keep_idx = None
 
-        # 3. Compute Desynchrony
-        # Note: passing 'n_replicates_real' to the aggregation step
-        df_final = desync_results(
-            df_real=df_real,
-            df_sim=df_sim,
-            group_cols=group_cols,
-            disp_function=disp_function,
-            post_estimator=post_estimator,
-            metrics=metrics,
-            n_replicates=n_replicates_real,
-            seed=seed,
-            # ext_time_col=ext_time_col,
-        )
+        if mode == "point_estimate":
+            # 2a. Simulate (point estimates only)
+            df_sim = self.simulate_cell_populations(
+                adata=adata,
+                context_col=context_col,
+                n_cells=n_cells,
+                layer_to_use=layer,
+                ext_time_label=ext_time_col,
+                sample_label=sample_col,
+                kappa=np.inf,
+                period=period,
+                device=device,
+                return_sim_data=True,
+                n_epochs_training=n_epochs_training,
+                n_replicates=n_replicates_sim,
+                library_size_vec=library_size_vec,
+                n_sim_runs=n_sim_runs,
+            )
+
+            # 3a. Compute desynchrony from point estimates
+            df_final = desync_results(
+                df_real=df_real,
+                df_sim=df_sim,
+                group_cols=group_cols,
+                disp_function=disp_function,
+                post_estimator=post_estimator,
+                metrics=metrics,
+                n_replicates=n_replicates_real,
+                seed=seed,
+            )
+
+        elif mode == "posterior_mixture":
+            # posterior_xc is already populated by _infer_on_adata called above
+            real_posterior_xc = self.posterior_xc
+            if cell_keep_idx is not None:
+                real_posterior_xc = real_posterior_xc[:, cell_keep_idx]
+
+            # 2b. Simulate and return full posteriors
+            df_sim, sim_posteriors_dict = self.simulate_cell_populations(
+                adata=adata,
+                context_col=context_col,
+                n_cells=n_cells,
+                layer_to_use=layer,
+                ext_time_label=ext_time_col,
+                sample_label=sample_col,
+                kappa=np.inf,
+                period=period,
+                device=device,
+                return_sim_data=True,
+                n_epochs_training=n_epochs_training,
+                n_replicates=n_replicates_sim,
+                library_size_vec=library_size_vec,
+                n_sim_runs=n_sim_runs,
+                return_posteriors=True,
+            )
+
+            # 3b. Compute desynchrony from posterior mixtures
+            df_final = desync_results_posterior(
+                df_real=df_real,
+                real_posterior_xc=real_posterior_xc,
+                df_sim=df_sim,
+                sim_posteriors_dict=sim_posteriors_dict,
+                group_cols=group_cols,
+                n_replicates=n_replicates_real,
+                seed=seed,
+            )
+
+        else:
+            raise ValueError(
+                f"Unknown mode '{mode}'. Choose 'point_estimate' or 'posterior_mixture'."
+            )
 
         return df_final
+
+    def _infer_on_adata(
+        self, adata, layer: str = "spliced", device: str = "cpu", n_theta: int = 100
+    ):
+        """
+        Run get_inferred_phases on an AnnData object, populating posterior_xc.
+
+        Used by estimate_phase_desynchrony(mode='posterior_mixture') to ensure
+        self.posterior_xc is aligned with the provided adata.
+
+        Parameters
+        ----------
+        adata : AnnData
+            Must contain all genes in self.genes (or a superset).
+        layer : str
+            Layer to use for count data.
+        device : str
+            Torch device.
+        n_theta : int
+            Phase grid resolution for posteriors.
+        """
+        import scipy.sparse
+
+        # Extract count matrix for model genes
+        missing = np.setdiff1d(self.genes, adata.var_names)
+        if len(missing) > 0:
+            raise ValueError(
+                f"adata is missing {len(missing)} model genes (e.g. {missing[:3]}). "
+                "Ensure adata contains all genes the model was trained on."
+            )
+        adata_sub = adata[:, self.genes]
+
+        if layer in adata_sub.layers:
+            X = adata_sub.layers[layer]
+        else:
+            X = adata_sub.X
+        if scipy.sparse.issparse(X):
+            X = X.toarray()
+        X = np.array(X, dtype=np.float32)
+
+        lib_sizes = X.sum(axis=1, keepdims=True).astype(np.float32)
+
+        data_c = torch.tensor(X, dtype=torch.float32, device=device)
+        data_c = data_c.unsqueeze(0).expand(n_theta, -1, -1)
+        counts_c = torch.tensor(lib_sizes, dtype=torch.float32, device=device)
+
+        self.to(device)
+        self.get_inferred_phases(data_c, n_theta=n_theta, counts=counts_c)
 
     def X_matrix(self, fixed_cell_mode, n_theta=None, mp=None):
 
@@ -884,3 +928,30 @@ class ContextModel(
             X_tensor = harmonic_dm_torch(phi_x_tensor, self.nh, False)
             X_tensor = X_tensor.unsqueeze(1).expand(n_theta, self.Nc, self.nh * 2)
             return X_tensor
+
+
+def compute_nb_params(
+    E_xcg: torch.Tensor, disp: torch.Tensor, counts: torch.Tensor, eps: float = 1e-6
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    JIT-compiled Negative Binomial parameter computation.
+
+    Args:
+        E_xcg: Expected mean values (before exp transform)
+        disp: Dispersion parameter
+        counts: Library size counts
+        eps: Epsilon for numerical stability
+
+    Returns:
+        r: Total count parameter
+        p: Success probability parameter (clamped)
+    """
+    E_xcg_exp = torch.exp(E_xcg) * counts
+    r = 1.0 / disp
+    p = disp * E_xcg_exp / (1.0 + disp * E_xcg_exp)
+    p = p.clamp(min=eps, max=1.0 - eps)
+    return r, p
+
+
+def compute_poisson_rate(E_xcg: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
+    return torch.exp(E_xcg) * counts

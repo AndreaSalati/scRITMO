@@ -5,12 +5,6 @@ This module provides functionality to fit gene parameters for a large set of gen
 (e.g., 10k-20k genes) independently using frozen phase posteriors from predictor genes.
 The key insight is that when phase posteriors are fixed, gene fits become independent
 and can be parallelized.
-
-Performance notes:
-- Runs on both CPU and GPU (set device='cuda' for GPU)
-- Typical runtime: ~2-3 minutes for 24,000 genes on CPU
-- ~10-20x faster on GPU
-- Uses PyTorch LBFGS (second-order optimizer) instead of standard gradient descent
 """
 
 import numpy as np
