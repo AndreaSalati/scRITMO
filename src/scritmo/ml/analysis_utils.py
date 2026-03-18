@@ -85,6 +85,8 @@ def desync_results(
     seed: int = 42,
     # sim arguments
     ext_time_col: str = "ext_time",
+    # weighting
+    weight_col: str | None = None,
 ):
     """
     First it aggregates data by calling aggregate_real_results and aggregate_simulated_results,
@@ -110,6 +112,7 @@ def desync_results(
         metrics=metrics,
         n_replicates=n_replicates,
         seed=seed,
+        weight_col=weight_col,
     )
 
     sim_agg = aggregate_simulated_results(
@@ -118,6 +121,7 @@ def desync_results(
         disp_function=disp_function,
         post_estimator=post_estimator,
         ext_time_col=ext_time_col,
+        weight_col="post_std" if weight_col is not None else None,
     )
 
     # 2. Initialize Mixed DataFrame
@@ -222,6 +226,7 @@ def aggregate_real_results(
     metrics: dict = None,
     n_replicates: int | None = None,
     seed: int = 42,
+    weight_col: str | None = None,
 ):
     """
     Aggregates the 'df_res' DataFrame.
@@ -266,6 +271,22 @@ def aggregate_real_results(
         agg_df = agg_df.rename(columns={post_estimator: "Data_cSTD"})
         agg_df["Data_R"] = cstd2R(agg_df["Data_cSTD"])
 
+    # Override Data_cSTD with weighted version (w = 1/post_std_c) if requested
+    if weight_col is not None and weight_col in df_to_agg.columns:
+        def _weighted_cstd(group_df):
+            phases = group_df[post_estimator].values
+            w = 1.0 / np.maximum(group_df[weight_col].values, 1e-10)
+            w /= w.sum()
+            R_val = float(np.abs(np.sum(w * np.exp(1j * phases))))
+            return float(np.sqrt(-2 * np.log(R_val + 1e-10)))
+
+        wcstd_series = df_to_agg.groupby(group_cols_with_rep).apply(_weighted_cstd)
+        wcstd_series.name = "Data_cSTD"
+        wcstd_df = wcstd_series.reset_index()
+        agg_df = agg_df.drop(columns=["Data_cSTD", "Data_R"], errors="ignore")
+        agg_df = agg_df.merge(wcstd_df, on=group_cols_with_rep)
+        agg_df["Data_R"] = cstd2R(agg_df["Data_cSTD"])
+
     # Get group sizes
     group_sizes = (
         df_to_agg.groupby(group_cols_with_rep).size().reset_index(name="group_size")
@@ -290,36 +311,41 @@ def aggregate_simulated_results(
     disp_function=sr.cSTD,
     post_estimator: str = "post_mode",
     ext_time_col: str = "ext_time",
+    weight_col: str | None = None,
 ):
-    # 1. Parse the 'run' out of the sample_name
-    # Assuming sample_name format is "SampleName_runX" or similar
-    # We want to group by ["context", "original_sample_name", "run_id"] first
-
-    # Regex to split sample_name from the run suffix if you added one
-    # Or, if you added a dedicated 'run_id' column in simulate_cell_populations, use that.
-    # If you didn't, we can extract it:
-
-    # Extract base sample name (removing _runX)
+    # Extract base sample name (removing _runX) and run id
     df_sim["base_sample"] = df_sim["sample_name"].str.replace(
         r"_run\d+$", "", regex=True
     )
     df_sim["run_id"] = df_sim["sample_name"].str.extract(r"(run\d+)$")
 
-    # 2. First Aggregation: Calculate Variance PER RUN
-    # This collapses the 300 cells -> 1 variance value per run
-    run_level_stats = (
-        df_sim.groupby(["context", "base_sample", "run_id"])
-        .agg(
-            {
-                post_estimator: disp_function,  # This computes cSTD for one run
-                "post_std": "mean",
-            }
-        )
-        .reset_index()
-    )
+    run_groups = ["context", "base_sample", "run_id"]
 
-    # Rename to clear names
-    run_level_stats = run_level_stats.rename(columns={post_estimator: "cSTD_run"})
+    # 2. First Aggregation: Calculate Variance PER RUN
+    if weight_col is not None and weight_col in df_sim.columns:
+        def _weighted_cstd_run(group_df):
+            phases = group_df[post_estimator].values
+            w = 1.0 / np.maximum(group_df[weight_col].values, 1e-10)
+            w /= w.sum()
+            R_val = float(np.abs(np.sum(w * np.exp(1j * phases))))
+            return float(np.sqrt(-2 * np.log(R_val + 1e-10)))
+
+        wcstd_series = df_sim.groupby(run_groups).apply(_weighted_cstd_run)
+        wcstd_series.name = "cSTD_run"
+        post_std_mean = df_sim.groupby(run_groups)["post_std"].mean()
+        run_level_stats = pd.concat([wcstd_series, post_std_mean], axis=1).reset_index()
+    else:
+        run_level_stats = (
+            df_sim.groupby(run_groups)
+            .agg(
+                {
+                    post_estimator: disp_function,  # This computes cSTD for one run
+                    "post_std": "mean",
+                }
+            )
+            .reset_index()
+        )
+        run_level_stats = run_level_stats.rename(columns={post_estimator: "cSTD_run"})
 
     # Convert to Variance (Statistics must be done on Variance, not STD)
     run_level_stats["Var_run"] = run_level_stats["cSTD_run"] ** 2
