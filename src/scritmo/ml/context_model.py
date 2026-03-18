@@ -699,8 +699,9 @@ class ContextModel(
         seed: int = 42,
         # --- Mode ---
         mode: str = "point_estimate",
-        # --- Cell filtering ---
+        # --- Cell filtering / weighting ---
         post_std_threshold: float = np.inf,
+        weight_by_post_std: bool = False,
     ):
         """
         Orchestrates the estimation of phase desynchrony by:
@@ -804,6 +805,7 @@ class ContextModel(
                 metrics=metrics,
                 n_replicates=n_replicates_real,
                 seed=seed,
+                weight_col="post_std_c" if weight_by_post_std else None,
             )
 
         elif mode == "posterior_mixture":
