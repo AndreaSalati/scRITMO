@@ -370,7 +370,7 @@ class ContextModel(
         self.post_var_c = post_var_c
         self.mle_c = log_mle_c / self.Ng
         self.post_mode_c = compute_posterior_mode(posterior_xc)
-        self.posterior_xc = posterior_xc  # full (Nx, Nc) posterior array
+        # self.posterior_xc = posterior_xc  # full (Nx, Nc) posterior array
 
         return post_mean_c
 

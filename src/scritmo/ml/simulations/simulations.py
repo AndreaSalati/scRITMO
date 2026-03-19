@@ -100,7 +100,6 @@ def simulate_data(
         population_mean = torch.linspace(0, 2 * np.pi, n_pop + 1)[:-1]
         phi_sim = torch.Tensor([])
         population = []
-        n_cells_in_pop = n_cells // n_pop
         for i, mean in enumerate(population_mean):
             phi_sim = torch.cat(
                 [
@@ -113,8 +112,23 @@ def simulate_data(
             phi_sim = phi_sim % (2 * np.pi)
             population.extend([str(i)] * (n_cells // n_pop))
     elif phi_sim is None and population_kappa is None:
-        phi_sim = torch.linspace(0, 2 * np.pi, n_cells)
-        population = None
+        if n_pop is None:
+            phi_sim = torch.linspace(0, 2 * np.pi, n_cells)
+            population = None
+        else:
+            population_mean = torch.linspace(0, 2 * np.pi, n_pop + 1)[:-1]
+            phi_sim = torch.Tensor([])
+            population = []
+            n_cells_in_pop = n_cells // n_pop
+            for i, mean in enumerate(population_mean):
+                phi_sim = torch.cat(
+                    [
+                        phi_sim,
+                        torch.ones(n_cells_in_pop) * mean,
+                    ]
+                )
+                population.extend([str(i)] * n_cells_in_pop)
+
     else:
         population = None
         phi_sim = torch.tensor(phi_sim, dtype=torch.float32)
@@ -223,6 +237,7 @@ def get_simulation_results(
 ):
     if n_pop is not None and n_cells % n_pop != 0:
         n_cells = (n_cells // n_pop) * n_pop
+
     mp, data_c, phi_sim, population = simulate_data(
         n_cells=n_cells,
         seq_depth=seq_depth,

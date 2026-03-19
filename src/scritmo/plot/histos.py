@@ -179,6 +179,7 @@ def plot_phase_polar_population(
     n_phase_ticks=6,
     ax=None,
     legend_title="",
+    time_units="h",
 ):
     """
     Plot phase population on a polar plot, with adaptive inner ring for histograms.
@@ -241,6 +242,7 @@ def plot_phase_polar_population(
         xtick_fontsize=xtick_fontsize,
         n_phase_ticks=n_phase_ticks,
         ax=ax,
+        time_units=time_units,
     )
 
     fig = ax.figure

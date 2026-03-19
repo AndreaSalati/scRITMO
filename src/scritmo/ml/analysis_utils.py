@@ -164,12 +164,54 @@ def desync_results(
     return df_mixed
 
 
-def desync_means(
-    df_desync,
-):
+def _weighted_se_bio_cSTD(bio_vars, weights, final_bio_var):
+    """
+    Compute the standard error of the biological cSTD (circular standard deviation)
+    from per-replicate biological variance estimates, using:
+    1. Weighted SEM on the variance (with Kish's effective sample size)
+    2. Delta method to propagate to the sqrt (cSTD) scale
+
+    Parameters
+    ----------
+    bio_vars : np.ndarray
+        Per-replicate biological variances (Data_cSTD^2 - Technical_cSTD^2), clipped >= 0.
+    weights : np.ndarray
+        Per-replicate weights (e.g. group_size).
+    final_bio_var : float
+        The weighted mean of bio_vars (i.e. the point estimate of the biological variance).
+
+    Returns
+    -------
+    float
+        Standard error of sqrt(final_bio_var), or NaN if not computable.
+    """
+    n_reps = len(bio_vars)
+    if n_reps <= 1 or final_bio_var <= 0:
+        return np.nan
+
+    # Weighted variance of the per-replicate bio variances
+    weighted_mean = np.average(bio_vars, weights=weights)
+    weighted_var = np.average((bio_vars - weighted_mean) ** 2, weights=weights)
+
+    # Kish's effective sample size
+    n_eff = np.sum(weights) ** 2 / np.sum(weights**2)
+
+    # Weighted SEM on the variance
+    se_var = np.sqrt(weighted_var / n_eff)
+
+    # Delta method: SE(sqrt(V)) = SE(V) / (2 * sqrt(V))
+    se_bio_cSTD = se_var / (2 * np.sqrt(final_bio_var))
+
+    return se_bio_cSTD
+
+
+def desync_means(df_desync):
     context_u = df_desync["context"].unique()
     df_desync["Technical_cSTD2"] = df_desync["Technical_cSTD"] ** 2
     df_desync["Data_cSTD2"] = df_desync["Data_cSTD"] ** 2
+    df_desync["Bio_Var"] = np.maximum(
+        df_desync["Data_cSTD2"] - df_desync["Technical_cSTD2"], 0
+    )
 
     results = []
     for ct in context_u:
@@ -187,24 +229,30 @@ def desync_means(
         else:
             condition = None
 
-        weighted_mean_technical_var = np.average(
-            df_ct["Technical_cSTD2"], weights=df_ct["group_size"]
-        )
-        weighted_mean_data_var = np.average(
-            df_ct["Data_cSTD2"], weights=df_ct["group_size"]
-        )
+        weights = df_ct["group_size"].values
 
-        final_bio_cSTD = np.sqrt(
-            np.maximum(weighted_mean_data_var - weighted_mean_technical_var, 0)
+        weighted_mean_technical_var = np.average(
+            df_ct["Technical_cSTD2"], weights=weights
         )
+        weighted_mean_data_var = np.average(df_ct["Data_cSTD2"], weights=weights)
+
+        final_bio_var = np.maximum(
+            weighted_mean_data_var - weighted_mean_technical_var, 0
+        )
+        final_bio_cSTD = np.sqrt(final_bio_var)
         final_technical_cSTD = np.sqrt(weighted_mean_technical_var)
         final_data_cSTD = np.sqrt(weighted_mean_data_var)
+
+        se_bio_cSTD = _weighted_se_bio_cSTD(
+            df_ct["Bio_Var"].values, weights, final_bio_var
+        )
 
         results.append(
             {
                 "ct": ct,
                 "Technical_cSTD": final_technical_cSTD,
                 "Bio_cSTD": final_bio_cSTD,
+                "Bio_cSTD_SE": se_bio_cSTD,
                 "Data_cSTD": final_data_cSTD,
                 "organ": organ,
                 "celltype": celltype,
@@ -213,7 +261,15 @@ def desync_means(
         )
 
     df_summary = pd.DataFrame(results).set_index("ct")[
-        ["Technical_cSTD", "Bio_cSTD", "Data_cSTD", "organ", "celltype", "condition"]
+        [
+            "Technical_cSTD",
+            "Bio_cSTD",
+            "Bio_cSTD_SE",
+            "Data_cSTD",
+            "organ",
+            "celltype",
+            "condition",
+        ]
     ]
     return df_summary
 
