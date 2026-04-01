@@ -243,10 +243,9 @@ def nmp(tensor):
     return tensor.detach().numpy()
 
 
-def get_ccg_pars():
-    path = (
-        "/home/maxine/Documents/andrea/context_repo/data/params_g/ccg_zhang_context.csv"
-    )
+def get_ccg_pars(path=None):
+    if path is None:
+        path = "/home/maxine/Documents/andrea/context_repo/data/params_g/ccg_zhang_context.csv"
     params_g = Beta(path)
     return params_g
 

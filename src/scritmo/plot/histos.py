@@ -352,6 +352,7 @@ def plot_polar_histogram(
     alpha=0.6,
     ax=None,
     xtick_fontsize=20,
+    time_units="h",
 ):
     """
     Plot a single phase population histogram on a polar plot.
@@ -375,6 +376,8 @@ def plot_polar_histogram(
         Whether to show the plot grid.
     hist_density : bool
         If True, the histogram is normalized.
+    time_units : str
+        Units for the time axis (e.g., "h" for hours).
     """
     # Prepare data
     phases = np.asarray(phases)
@@ -397,6 +400,7 @@ def plot_polar_histogram(
         show_grid=show_grid,
         ax=ax,
         xtick_fontsize=xtick_fontsize,
+        time_units=time_units,
     )
     fig = ax.figure
 
