@@ -30,26 +30,6 @@ scRITMO addresses this by:
 2. **Expanded gene sets** — Core clock genes alone create "phase attractor zones" at low sequencing depths where inferred phases artificially cluster. scRITMO mitigates this by incorporating a broader, cell-type-specific set of rhythmically expressed genes (Extended-Set) beyond the core clock circuit.
 3. **Desynchrony quantification** — A variance decomposition framework separates the observed population phase spread (σ_data) into a technical component (σ_technical, estimated via matched simulations) and the true biological desynchrony (σ_bio), enabling meaningful cross-condition comparisons.
 
-### 
-
-## Package structure
-
-scRITMO provides both a pip-installable Python package (`scritmo`) and standalone scripts for the probabilistic models:
-
-```
-scritmo/                  # Core installable package
-├── ml/                   # ML module (PyTorch-based models)
-│   ├── context_model.py  # ContextModel: the main scRITMO model with NB likelihood,
-│   │                     #   harmonic expression, and multi-context support
-│   ├── marginalization.py# Phase marginalization via Simpson's rule (JIT-compiled)
-│   ├── trainer.py        # Training loop (Adam optimizer, adaptive scheduling)
-│   ├── warmup.py         # Warmup utilities for parameter initialization
-│   ├── utils.py          # Harmonic design matrices, posterior computation helpers
-│   ├── analysis_utils.py # Post-inference analysis: results DataFrames, desynchrony
-│   │                     #   estimation, pseudobulk rhythmicity testing
-│   └── simulate_populations.py  # Simulation framework for benchmarking
-├── ...                   # scRNA-seq utilities, pseudobulk analysis, rhythmic analysis
-```
 
 ### Core model
 
