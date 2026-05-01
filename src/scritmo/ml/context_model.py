@@ -186,7 +186,9 @@ class ContextModel(
             self.log_disp = nn.Parameter(-torch.ones(self.Ny, 1))
         elif fix_disp_val == "gene":
             if "disp" in mp["params_g"].columns:
-                self.log_disp = nn.Parameter(tt(np.log(mp["params_g"]["disp"].values), dtype=torch.float32))
+                self.log_disp = nn.Parameter(
+                    tt(np.log(mp["params_g"]["disp"].values), dtype=torch.float32)
+                )
             else:
                 self.log_disp = nn.Parameter(-torch.ones(self.Ng))
         else:
@@ -693,9 +695,12 @@ class ContextModel(
         return_sim_data=False,
         n_epochs_training=0,
         n_replicates=None,
+        seed_replicates: int = 42,
+        seed_sim: int | None = None,
         library_size_vec=None,
         n_sim_runs=1,
         return_posteriors=False,
+        use_circular_mean=False,
     ):
         """
         Wrapper around the simulate_cell_populations function.
@@ -714,9 +719,12 @@ class ContextModel(
             return_sim_data=return_sim_data,
             n_epochs_training=n_epochs_training,
             n_replicates=n_replicates,
+            seed_replicates=seed_replicates,
+            seed_sim=seed_sim,
             library_size_vec=library_size_vec,
             n_sim_runs=n_sim_runs,
             return_posteriors=return_posteriors,
+            use_circular_mean=use_circular_mean,
         )
 
     def create_results_df(
@@ -770,7 +778,8 @@ class ContextModel(
         disp_function=cSTD,
         metrics: dict | None = None,
         n_replicates_real: int | None = None,
-        seed: int = 42,
+        seed_real: int = 42,
+        seed_sim: int | None = None,
         # --- Mode ---
         mode: str = "point_estimate",
         # --- Cell filtering / weighting ---
@@ -867,6 +876,7 @@ class ContextModel(
                 return_sim_data=True,
                 n_epochs_training=n_epochs_training,
                 n_replicates=n_replicates_sim,
+                seed_sim=seed_sim,
                 library_size_vec=library_size_vec,
                 n_sim_runs=n_sim_runs,
                 use_circular_mean=use_circular_mean,
@@ -881,7 +891,7 @@ class ContextModel(
                 post_estimator=post_estimator,
                 metrics=metrics,
                 n_replicates=n_replicates_real,
-                seed=seed,
+                seed=seed_real,
                 weight_col="post_std_c" if weight_by_post_std else None,
             )
 
@@ -905,6 +915,7 @@ class ContextModel(
                 return_sim_data=True,
                 n_epochs_training=n_epochs_training,
                 n_replicates=n_replicates_sim,
+                seed_sim=seed_sim,
                 library_size_vec=library_size_vec,
                 n_sim_runs=n_sim_runs,
                 return_posteriors=True,
@@ -919,7 +930,7 @@ class ContextModel(
                 sim_posteriors_dict=sim_posteriors_dict,
                 group_cols=group_cols,
                 n_replicates=n_replicates_real,
-                seed=seed,
+                seed=seed_real,
             )
 
         else:
