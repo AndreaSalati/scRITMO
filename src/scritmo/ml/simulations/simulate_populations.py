@@ -136,6 +136,7 @@ def simulate_cell_populations(
     library_size_vec: np.ndarray | None = None,
     n_sim_runs: int = 5,  # NEW: Number of "Twin" simulations to run
     return_posteriors: bool = False,
+    use_circular_mean: bool = False,
 ):
     # --- 1. Initial Setup ---
     fourier_coefficients_y = cmodel.get_parameter_dataframe_context(
@@ -159,6 +160,9 @@ def simulate_cell_populations(
     obs["ext_time_rad"] = get_ext_time(
         adata.obs[ext_time_label], period=period, convert_rad=True
     )
+
+    if use_circular_mean:
+        obs["inferred_phase"] = cmodel.post_mode_c
 
     # Replicate assignment logic
     base_group_by_cols = [context_col, sample_label]
@@ -200,7 +204,12 @@ def simulate_cell_populations(
 
             df_obs_group = obs.loc[mask]
             library_size_group = df_obs_group["library_size"].values
-            ext_time_mean = df_obs_group["ext_time_rad"].values[0]
+            if use_circular_mean:
+                ext_time_mean = circmean(
+                    df_obs_group["inferred_phase"].values, high=2 * np.pi, low=0
+                )
+            else:
+                ext_time_mean = df_obs_group["ext_time_rad"].values[0]
 
             if len(library_size_group) == 0:
                 continue

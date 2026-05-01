@@ -20,7 +20,7 @@ def warmup_and_train(
     context_mode,
     fix_phase,
     noise_model="nb",
-    fix_disp_val=None,
+    fix_disp_val="gene",
     log_amp_fn="logit",
     counts=None,
     # batch parameters

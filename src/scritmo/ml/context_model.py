@@ -36,6 +36,7 @@ from .analysis_utils import (
     desync_results_posterior,
 )
 from .genome_fit import GenomeFitMixin
+from .null_model import NullModelMixin
 
 circSTD = partial(cSTD, adjust=True)
 
@@ -47,6 +48,7 @@ class ContextModel(
     MarginalizationMixin,
     FisherUncertaintyMixin,
     GenomeFitMixin,
+    NullModelMixin,
 ):
     """
     A deterministic model that uses Simpson's rule for integration
@@ -78,7 +80,12 @@ class ContextModel(
                 - "context_only" Keeps Betas fixed, fits intercept and scaling
             fix_phase: If True, acrophase parameters are fixed (not trained)
             noise_model: "nb" for Negative Binomial, "poisson" for Poisson
-            fix_disp_val: If provided, fixes the dispersion parameter to this value
+            fix_disp_val: Controls dispersion initialization and shape.
+                - "gene": Per-gene dispersion (Ng,), trainable. If params_g has a "disp"
+                  column (e.g. from a previous run), warm-starts from those values.
+                - "context": Per-context dispersion (Ny, 1), trainable.
+                - None: Single scalar dispersion, trainable.
+                - float: Fixed scalar dispersion, not trained.
             log_amp_fn: "logit" or "log" to control amplitude parameterization
             method: Integration method, either "simpson" or "sum"
         """
@@ -173,14 +180,15 @@ class ContextModel(
         else:
             self.k_beta = None
 
-        if "disp" in mp and mp["disp"] is not None:
-            self.log_disp = nn.Parameter(tt(np.log(mp["disp"]), dtype=torch.float32))
-        elif fix_disp_val is None:
+        if fix_disp_val is None:
             self.log_disp = nn.Parameter(tt(-1.0))
         elif fix_disp_val == "context":
             self.log_disp = nn.Parameter(-torch.ones(self.Ny, 1))
         elif fix_disp_val == "gene":
-            self.log_disp = nn.Parameter(-torch.ones(self.Ng))
+            if "disp" in mp["params_g"].columns:
+                self.log_disp = nn.Parameter(tt(np.log(mp["params_g"]["disp"].values), dtype=torch.float32))
+            else:
+                self.log_disp = nn.Parameter(-torch.ones(self.Ng))
         else:
             self.log_disp = nn.Parameter(tt(np.log(fix_disp_val)))
             self.log_disp.requires_grad = False
@@ -202,6 +210,73 @@ class ContextModel(
         self.context_mode = context_mode
 
     set_context_mode = set_context_mode
+
+    @classmethod
+    def from_params_g(
+        cls,
+        params_g,
+        context_mode="none",
+        fix_phase=False,
+        noise_model="nb",
+        fix_disp_val="gene",
+        log_amp_fn="logit",
+        device="cpu",
+    ):
+        """
+        Initialize a ContextModel from gene parameters only, without adata.
+
+        Creates a model with gene parameters loaded from params_g but with
+        no real dataset attached.  Dataset-specific buffers (X, dm, counts)
+        are populated with dummy values for a single cell and are rebuilt
+        automatically when get_inferred_phases is called with real data
+        (the Nc-mismatch path in get_phase_posteriors handles this, but
+        requires context_mode="none" and explicit counts= argument).
+
+        Typical use:
+            params_g = sr.Beta("saved_params.csv")
+            cmodel = ContextModel.from_params_g(params_g)
+            # later, with real adata:
+            data_c, mp = assemble_mp(adata, params_g, labels=np.ones(Nc), ...)
+            cmodel.get_inferred_phases(data_c, counts=mp["counts"], n_theta=100)
+            bic_df = cmodel.fit_null_model(adata, counts=counts)
+
+        Args:
+            params_g      : Beta (or DataFrame) with columns a_0, amp, phase
+                            (and optionally disp for warm-start dispersion).
+            context_mode  : Must be "none" for inference on new data.
+            fix_phase     : Whether to fix acrophase parameters.
+            noise_model   : "nb" or "poisson".
+            fix_disp_val  : Dispersion mode (see __init__ docstring).
+            log_amp_fn    : "logit" or "log".
+            device        : Torch device string.
+        """
+        from scritmo import Beta
+
+        params_g = Beta(params_g)
+        Ng = len(params_g)
+
+        # minimal mp with a single dummy cell
+        mp = {
+            "params_g": params_g,
+            "context": np.array([1]),
+            "counts": torch.ones(1, 1, dtype=torch.float32, device=device),
+            "weights_g": None,
+            "k_beta": None,
+            "rhythmic_degradation": False,
+            "batch": None,
+        }
+        # dummy data tensor: (Nx=1, Nc=1, Ng)
+        y_dummy = torch.zeros(1, 1, Ng, dtype=torch.float32, device=device)
+
+        return cls(
+            mp,
+            y_dummy,
+            context_mode=context_mode,
+            fix_phase=fix_phase,
+            noise_model=noise_model,
+            fix_disp_val=fix_disp_val,
+            log_amp_fn=log_amp_fn,
+        )
 
     def forward(self, y, indices=slice(None), y_u=None, **kwargs):
         """
@@ -231,7 +306,6 @@ class ContextModel(
         ]
 
         # cells priors
-
         loss = tt(0.0, device=self.dev)
 
         # sum over genes, add here a weighted sum?
@@ -702,6 +776,8 @@ class ContextModel(
         # --- Cell filtering / weighting ---
         post_std_threshold: float = np.inf,
         weight_by_post_std: bool = False,
+        # --- Simulation mean estimation ---
+        use_circular_mean: bool = False,
     ):
         """
         Orchestrates the estimation of phase desynchrony by:
@@ -793,6 +869,7 @@ class ContextModel(
                 n_replicates=n_replicates_sim,
                 library_size_vec=library_size_vec,
                 n_sim_runs=n_sim_runs,
+                use_circular_mean=use_circular_mean,
             )
 
             # 3a. Compute desynchrony from point estimates
@@ -831,6 +908,7 @@ class ContextModel(
                 library_size_vec=library_size_vec,
                 n_sim_runs=n_sim_runs,
                 return_posteriors=True,
+                use_circular_mean=use_circular_mean,
             )
 
             # 3b. Compute desynchrony from posterior mixtures
