@@ -36,12 +36,14 @@ from .analysis_utils import (
     desync_results_posterior,
 )
 from .genome_fit import GenomeFitMixin
+from .felix_mixin import FelixDesynchronyMixin
 
 circSTD = partial(cSTD, adjust=True)
 
 
 class ContextModel(
     nn.Module,
+    FelixDesynchronyMixin,
     EnsembleMixin,
     UnsplicedMixin,
     MarginalizationMixin,
