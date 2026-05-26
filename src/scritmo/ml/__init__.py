@@ -17,3 +17,10 @@ from .analysis_utils import (
     desync_means,
     desync_results,
 )
+from .sigma_marginal import (
+    fit_felix,
+    fit_sigma_only,
+    estimate_sigma_from_data,
+    marginal_loglik,
+    nb_logpmf_r,
+)
