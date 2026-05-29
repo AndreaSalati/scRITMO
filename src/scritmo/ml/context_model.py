@@ -65,6 +65,7 @@ class ContextModel(
         fix_disp_val="gene",
         log_amp_fn="logit",
         method="simpson",
+        entropy_factor=None,
     ):
         """
         Initialize the context model with flexible context effects.
@@ -88,6 +89,11 @@ class ContextModel(
                 - float: Fixed scalar dispersion, not trained.
             log_amp_fn: "logit" or "log" to control amplitude parameterization
             method: Integration method, either "simpson" or "sum"
+            entropy_factor: Optional weight for the phase-entropy regularizer. When set
+                (and not in fixed-phase mode), an extra term is added to the loss that
+                penalizes a peaked marginal distribution of cells over the phase grid,
+                encouraging cells to spread around the circle (analogous to CoPhaser's
+                circular entropy term). None or 0 disables it.
         """
         super().__init__()
 
@@ -98,6 +104,7 @@ class ContextModel(
         self.register_buffer("dm", self.design_matrix(mp["context"]))
         self.Ny = self.dm.shape[1]
         self.method = method
+        self.entropy_factor = entropy_factor
         self.register_buffer("counts", mp["counts"].clone())
         self.context = mp["context"]
         self.context_u = np.unique(mp["context"])
@@ -323,6 +330,21 @@ class ContextModel(
                 ll_xc, l_prior_xc, ll_e_xc, method=self.method, return_integrand=True
             )
             loss_like = -self.log_like_loss(l_c, max_c)
+
+            # optional phase-entropy regularizer: penalize a peaked marginal
+            # distribution of cells over the phase grid (encourages cells to
+            # spread around the circle, like CoPhaser's circular entropy term)
+            if self.entropy_factor:
+                # per-cell posterior over the grid (max_c shift cancels here)
+                p_xc = l_xc / (l_xc.sum(dim=0, keepdim=True) + 1e-10)  # (Nx, Nc)
+                q_x = p_xc.mean(dim=1)  # (Nx,) marginal phase distribution
+                q_x = q_x / (q_x.sum() + 1e-10)
+                H = -(q_x * (q_x + 1e-10).log()).sum()  # 0 .. log(Nx)
+                Nc = ll_xc.shape[1]
+                # scale by Nc so the term is commensurate with the cell-summed
+                # likelihood and entropy_factor is batch-size invariant
+                loss = loss - self.entropy_factor * Nc * H
+                self.last_entropy = H.item()
 
         loss_beta = -self.beta_prior()
         loss += loss_like + loss_beta * Nb

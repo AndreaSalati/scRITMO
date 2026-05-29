@@ -130,7 +130,7 @@ def warmup_and_train(
         noise_model=noise_model,
         fix_disp_val=fix_disp_val,
         log_amp_fn=log_amp_fn,
-        # entropy_factor=entropy_factor,
+        entropy_factor=entropy_factor,
     )
     cmodel.to(device)
 

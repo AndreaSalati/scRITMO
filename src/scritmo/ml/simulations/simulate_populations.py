@@ -132,7 +132,8 @@ def simulate_cell_populations(
     return_sim_data=False,
     n_epochs_training=0,
     n_replicates: int | None = None,
-    seed: int = 42,
+    seed_replicates: int = 42,
+    seed_sim: int | None = None,
     library_size_vec: np.ndarray | None = None,
     n_sim_runs: int = 5,  # NEW: Number of "Twin" simulations to run
     return_posteriors: bool = False,
@@ -164,11 +165,15 @@ def simulate_cell_populations(
     if use_circular_mean:
         obs["inferred_phase"] = cmodel.post_mode_c
 
+    if seed_sim is not None:
+        torch.manual_seed(seed_sim)
+        np.random.seed(seed_sim)
+
     # Replicate assignment logic
     base_group_by_cols = [context_col, sample_label]
     if n_replicates is not None:
         obs["replicate"] = assign_replicates(
-            obs, base_group_by_cols, n_replicates, seed
+            obs, base_group_by_cols, n_replicates, seed_replicates
         )
         group_by_cols = base_group_by_cols + ["replicate"]
     else:
