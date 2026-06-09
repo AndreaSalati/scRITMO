@@ -1,16 +1,21 @@
-"""Marginal-likelihood desynchrony estimator (Felix's method).
+"""Marginal-likelihood desynchrony estimator.
 
 This module implements a cell-level marginal likelihood where each cell has a
 latent phase offset δ_i ~ N(0, σ_k), integrated out with Gauss-Hermite quadrature.
 
 It can be used in two modes:
 
-1. **Full fit** (:func:`fit_felix`): two-stage MLE of all parameters (gene + σ),
-   identical to Felix's original ``felix_method.core.fit_felix``.
+1. **Full fit** (:func:`fit_marginal_mle`): two-stage MLE of all parameters
+   (gene + σ).
 
 2. **σ-only fit** (:func:`fit_sigma_only`): given fixed gene parameters from a
    trained scRITMO ContextModel, optimize only the per-timepoint σ_k. This is
    the "post-hoc σ estimator" (Level A integration).
+
+The low-level functions accept either ``timepoints`` (hours, K-array) or
+``anchor_phases`` (radians, K-array) for the per-group anchor — the latter
+supports the "adaptive" mode that anchors σ on scRITMO-inferred phases rather
+than external collection times.
 
 Integration with scRITMO
 ------------------------
@@ -39,11 +44,6 @@ This module uses **numpy / scipy only** (no JAX, no PyTorch) — it is a
 standalone post-hoc estimator that takes pre-computed gene parameters and
 optimises only the desynchrony σ.
 
-References
-----------
-- Hollis et al. 2026 (ORPHEUS): law-of-total-variance desynchrony estimator.
-- Felix's reimplementation: cell-level marginal likelihood with Gauss-Hermite
-  quadrature over the latent per-cell phase offset.
 """
 
 from __future__ import annotations
@@ -92,7 +92,9 @@ def nb_logpmf_r(y, mu, r):
     )
 
 
-def marginal_loglik(Y, L, time_index, timepoints, params, gh_x, gh_w):
+def marginal_loglik(
+    Y, L, time_index, timepoints, params, gh_x, gh_w, anchor_phases=None
+):
     """Cell-level marginal log-likelihood, summed over cells.
 
     Parameters
@@ -102,20 +104,26 @@ def marginal_loglik(Y, L, time_index, timepoints, params, gh_x, gh_w):
     L : ndarray, shape (N,)
         Library size (total UMI count) per cell.
     time_index : ndarray, shape (N,)
-        Integer index mapping each cell to a timepoint in ``timepoints``.
-    timepoints : ndarray, shape (K,)
-        Nominal collection times in hours (one per timepoint).
+        Integer index mapping each cell to a group (timepoint or batch) in
+        ``timepoints`` / ``anchor_phases``.
+    timepoints : ndarray, shape (K,) or None
+        Nominal collection times in hours (one per group).  Ignored when
+        ``anchor_phases`` is provided.
     params : dict
         Must contain keys:
           - ``alpha``    (G,)  log-baseline expression
           - ``beta_cos`` (G,)  cosine amplitude
           - ``beta_sin`` (G,)  sine amplitude
           - ``disp``     (G,)  NB dispersion (Var = mu + disp * mu²)
-          - ``sigma``    (K,)  per-timepoint phase spread (radians)
+          - ``sigma``    (K,)  per-group phase spread (radians)
     gh_x : ndarray, shape (n_gh,)
         Gauss-Hermite quadrature nodes.
     gh_w : ndarray, shape (n_gh,)
         Gauss-Hermite quadrature weights.
+    anchor_phases : ndarray, shape (K,), optional
+        Per-group anchor phases in **radians**.  When provided, the cell
+        phase used in the NB mean is ``anchor_phases[time_index] + δ_iq``,
+        replacing the default ``ω · timepoints[time_index] + δ_iq``.
 
     Returns
     -------
@@ -128,19 +136,22 @@ def marginal_loglik(Y, L, time_index, timepoints, params, gh_x, gh_w):
     disp = params["disp"]
     sigma = params["sigma"]
 
-    t_i = timepoints[time_index]
+    if anchor_phases is not None:
+        phi_k = np.asarray(anchor_phases, dtype=float)
+    else:
+        phi_k = OMEGA * np.asarray(timepoints, dtype=float)
+    phi_i = phi_k[time_index]
     sigma_i = sigma[time_index]
 
     # Gauss-Hermite: δ_iq = sqrt(2) * σ_i * x_q
     delta_iq = np.sqrt(2.0) * sigma_i[:, None] * gh_x[None, :]
-    # φ_iq = ω * t_i + δ_iq
-    x_iq = OMEGA * t_i[:, None] + delta_iq
+    # φ_iq = anchor_i + δ_iq  (anchor_i = ω·t_i in hours mode, or supplied directly)
+    x_iq = phi_i[:, None] + delta_iq
 
     # μ_iqg = L_i * exp(α_g + β^c_g cos(φ_iq) + β^s_g sin(φ_iq))
-    rhythmic = (
-        beta_cos[None, None, :] * np.cos(x_iq[:, :, None])
-        + beta_sin[None, None, :] * np.sin(x_iq[:, :, None])
-    )
+    rhythmic = beta_cos[None, None, :] * np.cos(x_iq[:, :, None]) + beta_sin[
+        None, None, :
+    ] * np.sin(x_iq[:, :, None])
     mu = L[:, None, None] * np.exp(alpha[None, None, :] + rhythmic)
 
     r = 1.0 / disp
@@ -199,7 +210,7 @@ def _unpack(vec, template, meta):
     out = {k: np.array(v, copy=True) for k, v in template.items()}
     pos = 0
     for name, shape, size in meta:
-        z = vec[pos:pos + size].reshape(shape)
+        z = vec[pos : pos + size].reshape(shape)
         out[name] = _from_unconstrained(name, z)
         pos += size
     return out
@@ -246,11 +257,13 @@ def pseudobulk_init(Y, L, time_index, timepoints, fixed_disp=0.1, sigma0=0.05):
             mean_frac[k] = np.mean(Y[idx] / L[idx, None], axis=0)
 
     # Cosinor regression: log(frac) = a_0 + a_1*cos(ωt) + b_1*sin(ωt)
-    X = np.column_stack([
-        np.ones(K),
-        np.cos(OMEGA * timepoints),
-        np.sin(OMEGA * timepoints),
-    ])
+    X = np.column_stack(
+        [
+            np.ones(K),
+            np.cos(OMEGA * timepoints),
+            np.sin(OMEGA * timepoints),
+        ]
+    )
     coef = np.zeros((G, 3))
     for g in range(G):
         coef[g], *_ = np.linalg.lstsq(
@@ -267,13 +280,13 @@ def pseudobulk_init(Y, L, time_index, timepoints, fixed_disp=0.1, sigma0=0.05):
     )
 
 
-def init_from_scritmo_params(gene_params, n_timepoints, dispersion=None,
-                             sigma0=0.05):
-    """Initialise Felix-style params from scRITMO's fitted gene parameters.
+def init_from_scritmo_params(gene_params, n_timepoints, dispersion=None, sigma0=0.05):
+    """Initialise marginal-likelihood params from scRITMO's fitted gene
+    parameters.
 
     scRITMO stores gene params as ``a_0`` (MESOR = alpha), ``a_1`` (cos
     amplitude = beta_cos), ``b_1`` (sin amplitude = beta_sin).  This function
-    converts them to the dict Felix's methods expect.
+    converts them to the dict the marginal-likelihood routines expect.
 
     Parameters
     ----------
@@ -292,7 +305,8 @@ def init_from_scritmo_params(gene_params, n_timepoints, dispersion=None,
     Returns
     -------
     dict
-        Parameter dict suitable for :func:`fit_sigma_only` or :func:`fit_felix`.
+        Parameter dict suitable for :func:`fit_sigma_only` or
+        :func:`fit_marginal_mle`.
     """
     alpha = gene_params["a_0"].values.astype(float)
     beta_cos = gene_params["a_1"].values.astype(float)
@@ -319,8 +333,17 @@ def init_from_scritmo_params(gene_params, n_timepoints, dispersion=None,
 # ---------------------------------------------------------------------------
 
 
-def fit_mle(Y, L, time_index, timepoints, init_params, free,
-            n_gh=25, maxiter=300):
+def fit_mle(
+    Y,
+    L,
+    time_index,
+    timepoints,
+    init_params,
+    free,
+    n_gh=25,
+    maxiter=300,
+    anchor_phases=None,
+):
     """Maximise the marginal log-likelihood (L-BFGS-B) over the parameters
     flagged ``True`` in ``free``.
 
@@ -336,6 +359,9 @@ def fit_mle(Y, L, time_index, timepoints, init_params, free,
         Number of Gauss-Hermite quadrature nodes.
     maxiter : int
         Maximum iterations for L-BFGS-B.
+    anchor_phases : ndarray, shape (K,), optional
+        Per-group anchor phases in radians.  Forwarded to
+        :func:`marginal_loglik`; bypasses the ``ω · timepoints`` conversion.
 
     Returns
     -------
@@ -350,20 +376,39 @@ def fit_mle(Y, L, time_index, timepoints, init_params, free,
     x0, meta, bounds = _pack(init_params, free)
 
     if len(x0) == 0:
-        ll = float(marginal_loglik(
-            Y, L, time_index, timepoints, init_params, gh_x, gh_w,
-        ))
+        ll = float(
+            marginal_loglik(
+                Y,
+                L,
+                time_index,
+                timepoints,
+                init_params,
+                gh_x,
+                gh_w,
+                anchor_phases=anchor_phases,
+            )
+        )
         return None, init_params, ll
 
     def objective(vec):
         params = _unpack(vec, init_params, meta)
         ll = marginal_loglik(
-            Y, L, time_index, timepoints, params, gh_x, gh_w,
+            Y,
+            L,
+            time_index,
+            timepoints,
+            params,
+            gh_x,
+            gh_w,
+            anchor_phases=anchor_phases,
         )
         return -float(ll)
 
     res = minimize(
-        objective, x0, method="L-BFGS-B", bounds=bounds,
+        objective,
+        x0,
+        method="L-BFGS-B",
+        bounds=bounds,
         options=dict(maxiter=maxiter),
     )
 
@@ -376,9 +421,19 @@ def fit_mle(Y, L, time_index, timepoints, init_params, free,
 # ---------------------------------------------------------------------------
 
 
-def fit_felix(Y, L, time_index, timepoints, n_gh=25, maxiter=300,
-              fixed_disp=0.1, sigma0=0.05, verbose=False):
-    """Full two-stage MLE (Felix's method): fit all gene params + σ.
+def fit_marginal_mle(
+    Y,
+    L,
+    time_index,
+    timepoints,
+    n_gh=25,
+    maxiter=300,
+    fixed_disp=0.1,
+    sigma0=0.05,
+    verbose=False,
+):
+    """Full two-stage MLE of the marginal log-likelihood: fit all gene
+    params + σ.
 
     Stage 1: clamp dispersion, fit (alpha, beta_cos, beta_sin, sigma).
     Stage 2: release dispersion, fit everything jointly.
@@ -411,18 +466,21 @@ def fit_felix(Y, L, time_index, timepoints, n_gh=25, maxiter=300,
         ``stage2_loglik``, ``sigma_rad`` (per-timepoint), ``sigma_hr``,
         ``sigma_phi_rad`` (median scalar), ``sigma_phi_hr`` (median scalar, hours).
     """
-    init = pseudobulk_init(Y, L, time_index, timepoints,
-                           fixed_disp=fixed_disp, sigma0=sigma0)
+    init = pseudobulk_init(
+        Y, L, time_index, timepoints, fixed_disp=fixed_disp, sigma0=sigma0
+    )
 
     free1 = dict(alpha=True, beta_cos=True, beta_sin=True, disp=False, sigma=True)
-    res1, fit1, ll1 = fit_mle(Y, L, time_index, timepoints, init, free1,
-                               n_gh=n_gh, maxiter=maxiter)
+    res1, fit1, ll1 = fit_mle(
+        Y, L, time_index, timepoints, init, free1, n_gh=n_gh, maxiter=maxiter
+    )
     if verbose:
         print(f"  stage1: success={getattr(res1, 'success', None)} ll={ll1:.1f}")
 
     free2 = dict(alpha=True, beta_cos=True, beta_sin=True, disp=True, sigma=True)
-    res2, fit2, ll2 = fit_mle(Y, L, time_index, timepoints, fit1, free2,
-                               n_gh=n_gh, maxiter=maxiter)
+    res2, fit2, ll2 = fit_mle(
+        Y, L, time_index, timepoints, fit1, free2, n_gh=n_gh, maxiter=maxiter
+    )
     if verbose:
         print(f"  stage2: success={getattr(res2, 'success', None)} ll={ll2:.1f}")
 
@@ -431,8 +489,12 @@ def fit_felix(Y, L, time_index, timepoints, n_gh=25, maxiter=300,
 
     return dict(
         init=init,
-        stage1=fit1, stage1_loglik=ll1, stage1_result=res1,
-        stage2=fit2, stage2_loglik=ll2, stage2_result=res2,
+        stage1=fit1,
+        stage1_loglik=ll1,
+        stage1_result=res1,
+        stage2=fit2,
+        stage2_loglik=ll2,
+        stage2_result=res2,
         sigma_rad=sigma_rad,
         sigma_hr=sigma_rad * rh,
         sigma_phi_rad=sigma_summary_rad,
@@ -440,13 +502,22 @@ def fit_felix(Y, L, time_index, timepoints, n_gh=25, maxiter=300,
     )
 
 
-def fit_sigma_only(Y, L, time_index, timepoints, fixed_params,
-                   n_gh=25, maxiter=200, verbose=False):
+def fit_sigma_only(
+    Y,
+    L,
+    time_index,
+    timepoints,
+    fixed_params,
+    n_gh=25,
+    maxiter=200,
+    verbose=False,
+    anchor_phases=None,
+):
     """Optimise only σ given fixed gene parameters (Level A integration).
 
     This is the key integration point with scRITMO: after training a
     ContextModel, extract its fitted gene parameters (alpha, beta_cos,
-    beta_sin, disp) and pass them as ``fixed_params``.  Only the per-timepoint
+    beta_sin, disp) and pass them as ``fixed_params``.  Only the per-group
     σ values are optimised.
 
     Parameters
@@ -456,9 +527,9 @@ def fit_sigma_only(Y, L, time_index, timepoints, fixed_params,
     L : ndarray, shape (N,)
         Library sizes (total UMI per cell).
     time_index : ndarray, shape (N,)
-        Per-cell timepoint index (0, ..., K-1).
-    timepoints : ndarray, shape (K,)
-        Timepoint values in hours.
+        Per-cell group index (0, ..., K-1) — timepoint or batch.
+    timepoints : ndarray, shape (K,) or None
+        Timepoint values in hours.  Ignored when ``anchor_phases`` is given.
     fixed_params : dict
         Fixed gene parameters with keys ``alpha`` (G,), ``beta_cos`` (G,),
         ``beta_sin`` (G,), ``disp`` (G,).  These are held constant.
@@ -468,15 +539,19 @@ def fit_sigma_only(Y, L, time_index, timepoints, fixed_params,
         Max iterations.
     verbose : bool
         Print optimisation progress.
+    anchor_phases : ndarray, shape (K,), optional
+        Per-group anchor phases in **radians** (adaptive mode).  When
+        provided, replaces ``ω · timepoints`` in the phase model.  K is
+        derived from ``len(anchor_phases)``.
 
     Returns
     -------
     dict
-        With keys: ``sigma_rad`` (per-timepoint), ``sigma_hr``,
+        With keys: ``sigma_rad`` (per-group), ``sigma_hr``,
         ``sigma_phi_rad`` (median), ``sigma_phi_hr`` (median, hours),
         ``loglik``, ``result``, ``fixed_params``.
     """
-    K = len(timepoints)
+    K = len(anchor_phases) if anchor_phases is not None else len(timepoints)
     init_sigma = np.full(K, 0.05)
 
     # Combine fixed params with optimisable sigma
@@ -484,15 +559,26 @@ def fit_sigma_only(Y, L, time_index, timepoints, fixed_params,
     params["sigma"] = init_sigma
 
     free = dict(alpha=False, beta_cos=False, beta_sin=False, disp=False, sigma=True)
-    res, params_hat, loglik = fit_mle(Y, L, time_index, timepoints, params, free,
-                                      n_gh=n_gh, maxiter=maxiter)
+    res, params_hat, loglik = fit_mle(
+        Y,
+        L,
+        time_index,
+        timepoints,
+        params,
+        free,
+        n_gh=n_gh,
+        maxiter=maxiter,
+        anchor_phases=anchor_phases,
+    )
 
     sigma_rad = np.asarray(params_hat["sigma"])
     sigma_summary_rad = float(np.median(sigma_rad))
 
     if verbose:
-        print(f"  sigma_only: success={getattr(res, 'success', None)} "
-              f"ll={loglik:.1f}  sigma_hr={sigma_summary_rad * rh:.3f}")
+        print(
+            f"  sigma_only: success={getattr(res, 'success', None)} "
+            f"ll={loglik:.1f}  sigma_hr={sigma_summary_rad * rh:.3f}"
+        )
 
     return dict(
         sigma_rad=sigma_rad,
@@ -511,7 +597,7 @@ def fit_sigma_only(Y, L, time_index, timepoints, fixed_params,
 
 
 def data_dict_from_arrays(Y, L, time_index, timepoints):
-    """Build the data dict Felix's methods expect.
+    """Build the data dict the marginal-likelihood routines expect.
 
     Parameters
     ----------
@@ -538,9 +624,10 @@ def data_dict_from_arrays(Y, L, time_index, timepoints):
     }
 
 
-def data_dict_from_adata(adata, gene_names=None, layer="spliced",
-                         ext_time_col="ZTmod", use_total_lib=True):
-    """Build Felix data dict from an AnnData object.
+def data_dict_from_adata(
+    adata, gene_names=None, layer="spliced", ext_time_col="ZTmod", use_total_lib=True
+):
+    """Build the marginal-likelihood data dict from an AnnData object.
 
     Parameters
     ----------
@@ -559,7 +646,7 @@ def data_dict_from_adata(adata, gene_names=None, layer="spliced",
     Returns
     -------
     dict
-        Felix data dict, or ``None`` if no genes overlap.
+        Data dict, or ``None`` if no genes overlap.
     int
         Number of genes selected.
     """
@@ -602,9 +689,11 @@ def data_dict_from_adata(adata, gene_names=None, layer="spliced",
     return dict(Y=Y, L=total_lib, time_index=time_index, timepoints=timepoints), n_genes
 
 
-def data_dict_from_scritmo_model(adata, cmodel, ext_time_col="ZTmod",
-                                 layer="spliced", use_total_lib=True):
-    """Build Felix data dict from a trained scRITMO ContextModel.
+def data_dict_from_scritmo_model(
+    adata, cmodel, ext_time_col="ZTmod", layer="spliced", use_total_lib=True
+):
+    """Build the marginal-likelihood data dict from a trained scRITMO
+    ContextModel.
 
     Uses the same gene subset that ``cmodel`` was trained on.
 
@@ -624,7 +713,7 @@ def data_dict_from_scritmo_model(adata, cmodel, ext_time_col="ZTmod",
     Returns
     -------
     dict
-        Felix data dict, or None if no genes.
+        Data dict, or None if no genes.
     int
         Number of genes.
     """
@@ -638,7 +727,8 @@ def data_dict_from_scritmo_model(adata, cmodel, ext_time_col="ZTmod",
 
 
 def params_dict_from_scritmo_model(cmodel, context_key=None):
-    """Extract Felix-style fixed parameters from a trained ContextModel.
+    """Extract fixed gene parameters from a trained ContextModel for the
+    marginal-likelihood routines.
 
     Parameters
     ----------
@@ -654,9 +744,7 @@ def params_dict_from_scritmo_model(cmodel, context_key=None):
         Fixed params dict with keys ``alpha``, ``beta_cos``, ``beta_sin``,
         ``disp``, suitable for :func:`fit_sigma_only`.
     """
-    param_df = cmodel.get_parameter_dataframe_context(
-        np.arange(cmodel.Ng)
-    )
+    param_df = cmodel.get_parameter_dataframe_context(np.arange(cmodel.Ng))
     if context_key is None:
         # Single context
         keys = list(param_df.keys())
@@ -690,14 +778,14 @@ def params_dict_from_scritmo_model(cmodel, context_key=None):
 # ---------------------------------------------------------------------------
 
 
-def estimate_sigma_from_data(Y, L, time_index, timepoints,
-                             fixed_params=None, n_gh=25, maxiter=300,
-                             verbose=False):
+def estimate_sigma_from_data(
+    Y, L, time_index, timepoints, fixed_params=None, n_gh=25, maxiter=300, verbose=False
+):
     """Estimate desynchrony σ from count data.
 
     Two modes:
     - If ``fixed_params`` is provided, runs σ-only optimisation (Level A).
-    - Otherwise, runs the full two-stage MLE (Felix's method).
+    - Otherwise, runs the full two-stage MLE.
 
     Parameters
     ----------
@@ -717,27 +805,44 @@ def estimate_sigma_from_data(Y, L, time_index, timepoints,
     """
     if fixed_params is not None:
         return fit_sigma_only(
-            Y, L, time_index, timepoints, fixed_params,
-            n_gh=n_gh, maxiter=maxiter, verbose=verbose,
+            Y,
+            L,
+            time_index,
+            timepoints,
+            fixed_params,
+            n_gh=n_gh,
+            maxiter=maxiter,
+            verbose=verbose,
         )
     else:
-        return fit_felix(
-            Y, L, time_index, timepoints,
-            n_gh=n_gh, maxiter=maxiter, verbose=verbose,
+        return fit_marginal_mle(
+            Y,
+            L,
+            time_index,
+            timepoints,
+            n_gh=n_gh,
+            maxiter=maxiter,
+            verbose=verbose,
         )
 
 
-def estimate_sigma_from_adata(adata, cmodel=None,
-                              gene_names=None, layer="spliced",
-                              ext_time_col="ZTmod", use_total_lib=True,
-                              context_key=None,
-                              n_gh=25, maxiter=300,
-                              verbose=False):
+def estimate_sigma_from_adata(
+    adata,
+    cmodel=None,
+    gene_names=None,
+    layer="spliced",
+    ext_time_col="ZTmod",
+    use_total_lib=True,
+    context_key=None,
+    n_gh=25,
+    maxiter=300,
+    verbose=False,
+):
     """Estimate desynchrony σ from an AnnData object, optionally using a
     trained ContextModel for fixed gene parameters.
 
     If ``cmodel`` is provided, uses scRITMO's fitted gene params (Level A).
-    Otherwise runs the full Felix method independently.
+    Otherwise runs the full two-stage MLE independently.
 
     Parameters
     ----------
@@ -762,12 +867,13 @@ def estimate_sigma_from_adata(adata, cmodel=None,
     Returns
     -------
     dict
-        Estimation result, plus keys ``data`` (the Felix data dict) and
+        Estimation result, plus keys ``data`` (the data dict) and
         ``n_genes``.
     """
     if cmodel is not None:
         data, n_genes = data_dict_from_scritmo_model(
-            adata, cmodel,
+            adata,
+            cmodel,
             ext_time_col=ext_time_col,
             layer=layer,
             use_total_lib=use_total_lib,
@@ -776,21 +882,33 @@ def estimate_sigma_from_adata(adata, cmodel=None,
             return {"sigma_phi_hr": np.nan, "n_genes": 0, "data": None}
         fixed_params = params_dict_from_scritmo_model(cmodel, context_key)
         result = fit_sigma_only(
-            data["Y"], data["L"], data["time_index"], data["timepoints"],
+            data["Y"],
+            data["L"],
+            data["time_index"],
+            data["timepoints"],
             fixed_params,
-            n_gh=n_gh, maxiter=maxiter, verbose=verbose,
+            n_gh=n_gh,
+            maxiter=maxiter,
+            verbose=verbose,
         )
     else:
         data, n_genes = data_dict_from_adata(
-            adata, gene_names=gene_names,
-            layer=layer, ext_time_col=ext_time_col,
+            adata,
+            gene_names=gene_names,
+            layer=layer,
+            ext_time_col=ext_time_col,
             use_total_lib=use_total_lib,
         )
         if data is None:
             return {"sigma_phi_hr": np.nan, "n_genes": 0, "data": None}
-        result = fit_felix(
-            data["Y"], data["L"], data["time_index"], data["timepoints"],
-            n_gh=n_gh, maxiter=maxiter, verbose=verbose,
+        result = fit_marginal_mle(
+            data["Y"],
+            data["L"],
+            data["time_index"],
+            data["timepoints"],
+            n_gh=n_gh,
+            maxiter=maxiter,
+            verbose=verbose,
         )
 
     result["data"] = data
