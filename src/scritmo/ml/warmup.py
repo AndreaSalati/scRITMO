@@ -30,6 +30,7 @@ def warmup_and_train(
     k_batch=None,
     # model init
     k_beta=None,
+    phi_init=None,
     # unspliced parameters
     rhythmic_degradation=True,
     # training
@@ -122,6 +123,21 @@ def warmup_and_train(
 
     if fixed_cell_phases is not None:
         mp["fixed_cell_phases"] = fixed_cell_phases
+
+    # Optional cold-start init for the acrophase, DECOUPLED from the prior center:
+    # beta_prior() stays centered on params_g["phase"] (the reference), while the
+    # trainable/buffered acrophase is initialized from phi_init instead. Used by the
+    # phi_g-recovery sims (init away from truth, prior on the reference template).
+    # Accepts a gene-indexed Series (reindexed to the final post-glm params_g order,
+    # robust to the init_mean gene subset above) or a plain array aligned to
+    # params_g.index. No-op when phi_init is None (default).
+    if phi_init is not None:
+        _phi_init = (
+            phi_init.loc[params_g.index].values
+            if isinstance(phi_init, pd.Series)
+            else np.asarray(phi_init, dtype=float)
+        )
+        mp["phi_init"] = np.asarray(_phi_init, dtype=float)
 
     cmodel = ContextModel(
         mp,
