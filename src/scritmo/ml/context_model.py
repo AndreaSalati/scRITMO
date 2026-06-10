@@ -830,6 +830,7 @@ class ContextModel(
         n_replicates_sim: int | None = None,
         library_size_vec=None,
         n_sim_runs: int = 5,
+        posterior_cell_chunk: int | None = None,
         # --- Real Data Arguments (create_results_df) ---
         other_obs_cols: list = [],
         allow_flip: bool = False,
@@ -940,6 +941,7 @@ class ContextModel(
                 library_size_vec=library_size_vec,
                 n_sim_runs=n_sim_runs,
                 use_circular_mean=use_circular_mean,
+                posterior_cell_chunk=posterior_cell_chunk,
             )
 
             # 3a. Compute desynchrony from point estimates
@@ -980,6 +982,7 @@ class ContextModel(
                 n_sim_runs=n_sim_runs,
                 return_posteriors=True,
                 use_circular_mean=use_circular_mean,
+                posterior_cell_chunk=posterior_cell_chunk,
             )
 
             # 3b. Compute desynchrony from posterior mixtures
