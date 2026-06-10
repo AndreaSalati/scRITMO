@@ -147,7 +147,9 @@ class ContextModel(
         # the Von-Mises prior below stays centered on the reference (prior_g). Backward
         # compatible: absent/None -> identical to the original behavior.
         if mp.get("phi_init") is not None:
-            acrophase_tensor = tt(np.asarray(mp["phi_init"], dtype=float), dtype=torch.float32)
+            acrophase_tensor = tt(
+                np.asarray(mp["phi_init"], dtype=float), dtype=torch.float32
+            )
         else:
             acrophase_tensor = tt(mp["params_g"]["phase"].values, dtype=torch.float32)
 
