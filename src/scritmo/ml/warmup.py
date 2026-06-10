@@ -50,6 +50,7 @@ def warmup_and_train(
     n_theta_post=24,
     weights_g=None,
     fixed_cell_phases=None,
+    posterior_cell_chunk=None,
 ):
 
     Ng = params_g.shape[0]
@@ -163,7 +164,9 @@ def warmup_and_train(
 
     # final inference
     if not cmodel.fixed_cell_mode:
-        cmodel.get_inferred_phases(data_c, y_u=data_u_c, n_theta=n_theta_post)
+        cmodel.get_inferred_phases(
+            data_c, y_u=data_u_c, n_theta=n_theta_post, cell_chunk=posterior_cell_chunk
+        )
 
     cmodel.params_g_inf = cmodel.get_parameter_dataframe()
     if return_data:

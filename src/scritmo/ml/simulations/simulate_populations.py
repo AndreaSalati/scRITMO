@@ -43,6 +43,7 @@ def _infer_phases_for_context(
     s_true_time: list,
     n_epochs_training: int = 0,
     return_posteriors: bool = False,
+    posterior_cell_chunk: int | None = None,
 ):
     """
     Performs phase inference and returns structured results as a list of dictionaries.
@@ -85,7 +86,9 @@ def _infer_phases_for_context(
         plt.ylabel("Loss")
         plt.show()
 
-    _ = model_y.get_inferred_phases(data_c, n_theta=100)
+    _ = model_y.get_inferred_phases(
+        data_c, n_theta=100, cell_chunk=posterior_cell_chunk
+    )
 
     # Capture both mean and standard deviation
     post_mean_c = model_y.post_mean_c
@@ -138,6 +141,7 @@ def simulate_cell_populations(
     n_sim_runs: int = 5,  # NEW: Number of "Twin" simulations to run
     return_posteriors: bool = False,
     use_circular_mean: bool = False,
+    posterior_cell_chunk: int | None = None,
 ):
     # --- 1. Initial Setup ---
     fourier_coefficients_y = cmodel.get_parameter_dataframe_context(
@@ -288,6 +292,7 @@ def simulate_cell_populations(
                 s_true_time=ctx_true_times,
                 n_epochs_training=n_epochs_training,
                 return_posteriors=return_posteriors,
+                posterior_cell_chunk=posterior_cell_chunk,
             )
             if return_posteriors:
                 context_results, ctx_posterior_xc = infer_result

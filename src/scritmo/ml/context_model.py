@@ -368,6 +368,7 @@ class ContextModel(
         return_all=False,
         counts=None,
         n_theta=None,
+        cell_chunk=None,
     ):
         """
         It gives you the posterior distribution of the phase
@@ -375,23 +376,18 @@ class ContextModel(
 
         Args:
             y: Data tensor
+            cell_chunk: if not None, process cells in chunks of this size to
+                bound peak GPU memory. The full-population log-likelihood tensor
+                scales as (n_theta, Nc, Ng); for large cell types this exceeds
+                GPU memory, so chunking over cells keeps it tractable. Results
+                are identical to the unchunked path (default None).
         Returns:
         """
         if self.fixed_cell_mode:
             raise RuntimeError("Cannot compute phase posteriors in fixed-phase mode.")
-        # in case I want to use a higher n_theta for phase resolution (differrent Nx)
-        if n_theta is not None:
-            # Use a higher n_theta for phase resolution
-            Nx = n_theta
 
-            # Repeat the data along the phase dimension
-            y = y[0, :, :].unsqueeze(0).repeat(n_theta, 1, 1)
-            if y_u is not None:
-                y_u = y_u[0, :, :].unsqueeze(0).repeat(n_theta, 1, 1)
-        else:
-            Nx = self.Nx
-
-        # in case I use a smaller or different dataset (different Nc)
+        # in case I use a smaller or different dataset (different Nc): rebuild the
+        # Nc-dependent buffers (cheap) before any per-chunk forward pass.
         if y.shape[1] != self.Nc:
             self.Nc = y.shape[1]
 
@@ -414,40 +410,67 @@ class ContextModel(
                 # adjust dm
                 self.register_buffer("dm", self.design_matrix(np.ones(self.Nc)))
 
-        # Run forward calculation without computing gradients
+        Nc_total = y.shape[1]
+        if cell_chunk is None or cell_chunk >= Nc_total:
+            cell_chunk = Nc_total
+
+        post_chunks, lmle_chunks = [], []
+
+        # Run forward calculation without computing gradients, chunking over cells
         with torch.no_grad():
-            dist = self.nb_dist(counts=counts, n_theta=n_theta)
-            ll_xcg = dist.log_prob(y)
+            for c0 in range(0, Nc_total, cell_chunk):
+                c1 = min(c0 + cell_chunk, Nc_total)
+                idx = slice(c0, c1)
 
-            if self.unspliced_mode:
-                if y_u is None:
-                    raise ValueError(
-                        "y_u (unspliced data) must be provided in unspliced_mode."
+                # build the (n_theta, chunk, Ng) data slice for this chunk
+                if n_theta is not None:
+                    y_c = y[0, idx, :].unsqueeze(0).repeat(n_theta, 1, 1)
+                    y_u_c = (
+                        y_u[0, idx, :].unsqueeze(0).repeat(n_theta, 1, 1)
+                        if y_u is not None
+                        else None
                     )
-                dist_u = self.nb_dist_unspliced(counts=counts, n_theta=n_theta)
-                ll_u_xcg = dist_u.log_prob(y_u)  # Unspliced log-likelihood
-                # the unspliced loss is added to the spliced one
-                ll_xcg = ll_xcg + ll_u_xcg  # Combine likelihoods
+                else:
+                    y_c = y[:, idx, :]
+                    y_u_c = y_u[:, idx, :] if y_u is not None else None
+                counts_c = counts[idx] if counts is not None else None
 
-            # cells priors
-            log_prior_xc = self.cell_prior()
+                dist = self.nb_dist(indices=idx, counts=counts_c, n_theta=n_theta)
+                ll_xcg = dist.log_prob(y_c)
 
-            # add here a weighted sum?
-            log_posterior_xc = (ll_xcg * self.weights_g).sum(2)  # + log_prior_xc
-            log_mle_c = (ll_xcg * self.weights_g).sum(2).max(0).values
-            posterior_xc = self.normalize_log_dist(log_posterior_xc, method=method)
+                if self.unspliced_mode:
+                    if y_u_c is None:
+                        raise ValueError(
+                            "y_u (unspliced data) must be provided in unspliced_mode."
+                        )
+                    dist_u = self.nb_dist_unspliced(
+                        indices=idx, counts=counts_c, n_theta=n_theta
+                    )
+                    ll_xcg = ll_xcg + dist_u.log_prob(y_u_c)
+
+                log_posterior_xc = (ll_xcg * self.weights_g).sum(2)  # + log_prior_xc
+                log_mle_c = log_posterior_xc.max(0).values
+                posterior_xc = self.normalize_log_dist(log_posterior_xc, method=method)
+
+                post_chunks.append(nmp(posterior_xc))
+                lmle_chunks.append(nmp(log_mle_c))
+
+        posterior_xc = np.concatenate(post_chunks, axis=1)
+        log_mle_c = np.concatenate(lmle_chunks, axis=0)
 
         if return_all:
-            l_xc = self.normalize_log_dist(
-                (ll_xcg * self.weights_g).sum(2), method=method
-            )
-            prior_xc = self.normalize_log_dist(log_prior_xc, method=method)
-            return (nmp(posterior_xc), nmp(l_xc), nmp(prior_xc), nmp(log_mle_c))
+            # with a flat phase prior l_xc is identical to posterior_xc; prior_xc
+            # is kept for API compatibility (unused by get_inferred_phases).
+            l_xc = posterior_xc
+            prior_xc = nmp(self.normalize_log_dist(self.cell_prior(), method=method))
+            return (posterior_xc, l_xc, prior_xc, log_mle_c)
 
         else:
-            return nmp(posterior_xc)
+            return posterior_xc
 
-    def get_inferred_phases(self, y, y_u=None, method="sum", counts=None, n_theta=None):
+    def get_inferred_phases(
+        self, y, y_u=None, method="sum", counts=None, n_theta=None, cell_chunk=None
+    ):
         """
         Wrapper around get_phase_posteriors to return just the posterior mean phases.
         it also stores the posterior mean, std and var as attributes
@@ -460,6 +483,7 @@ class ContextModel(
             return_all=True,
             counts=counts,
             n_theta=n_theta,
+            cell_chunk=cell_chunk,
         )
         post_mean_c, post_var_c, post_std_c = compute_posterior_statistics(posterior_xc)
         self.disp = nmp(self.log_disp.exp())
@@ -723,6 +747,7 @@ class ContextModel(
         n_sim_runs=1,
         return_posteriors=False,
         use_circular_mean=False,
+        posterior_cell_chunk=None,
     ):
         """
         Wrapper around the simulate_cell_populations function.
@@ -747,6 +772,7 @@ class ContextModel(
             n_sim_runs=n_sim_runs,
             return_posteriors=return_posteriors,
             use_circular_mean=use_circular_mean,
+            posterior_cell_chunk=posterior_cell_chunk,
         )
 
     def create_results_df(
