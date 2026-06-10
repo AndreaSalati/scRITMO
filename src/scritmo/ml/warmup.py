@@ -20,7 +20,7 @@ def warmup_and_train(
     context_mode,
     fix_phase,
     noise_model="nb",
-    fix_disp_val=None,
+    fix_disp_val="gene",
     log_amp_fn="logit",
     counts=None,
     # batch parameters
@@ -50,6 +50,7 @@ def warmup_and_train(
     n_theta_post=24,
     weights_g=None,
     fixed_cell_phases=None,
+    posterior_cell_chunk=None,
 ):
 
     Ng = params_g.shape[0]
@@ -130,7 +131,7 @@ def warmup_and_train(
         noise_model=noise_model,
         fix_disp_val=fix_disp_val,
         log_amp_fn=log_amp_fn,
-        # entropy_factor=entropy_factor,
+        entropy_factor=entropy_factor,
     )
     cmodel.to(device)
 
@@ -163,7 +164,9 @@ def warmup_and_train(
 
     # final inference
     if not cmodel.fixed_cell_mode:
-        cmodel.get_inferred_phases(data_c, y_u=data_u_c, n_theta=n_theta_post)
+        cmodel.get_inferred_phases(
+            data_c, y_u=data_u_c, n_theta=n_theta_post, cell_chunk=posterior_cell_chunk
+        )
 
     cmodel.params_g_inf = cmodel.get_parameter_dataframe()
     if return_data:

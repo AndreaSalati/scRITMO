@@ -37,6 +37,7 @@ from .analysis_utils import (
 )
 from .genome_fit import GenomeFitMixin
 from .desync_mixin import DesynchronyMixin
+from .null_model import NullModelMixin
 
 circSTD = partial(cSTD, adjust=True)
 
@@ -49,6 +50,7 @@ class ContextModel(
     MarginalizationMixin,
     FisherUncertaintyMixin,
     GenomeFitMixin,
+    NullModelMixin,
 ):
     """
     A deterministic model that uses Simpson's rule for integration
@@ -65,6 +67,7 @@ class ContextModel(
         fix_disp_val="gene",
         log_amp_fn="logit",
         method="simpson",
+        entropy_factor=None,
     ):
         """
         Initialize the context model with flexible context effects.
@@ -80,9 +83,19 @@ class ContextModel(
                 - "context_only" Keeps Betas fixed, fits intercept and scaling
             fix_phase: If True, acrophase parameters are fixed (not trained)
             noise_model: "nb" for Negative Binomial, "poisson" for Poisson
-            fix_disp_val: If provided, fixes the dispersion parameter to this value
+            fix_disp_val: Controls dispersion initialization and shape.
+                - "gene": Per-gene dispersion (Ng,), trainable. If params_g has a "disp"
+                  column (e.g. from a previous run), warm-starts from those values.
+                - "context": Per-context dispersion (Ny, 1), trainable.
+                - None: Single scalar dispersion, trainable.
+                - float: Fixed scalar dispersion, not trained.
             log_amp_fn: "logit" or "log" to control amplitude parameterization
             method: Integration method, either "simpson" or "sum"
+            entropy_factor: Optional weight for the phase-entropy regularizer. When set
+                (and not in fixed-phase mode), an extra term is added to the loss that
+                penalizes a peaked marginal distribution of cells over the phase grid,
+                encouraging cells to spread around the circle (analogous to CoPhaser's
+                circular entropy term). None or 0 disables it.
         """
         super().__init__()
 
@@ -93,6 +106,7 @@ class ContextModel(
         self.register_buffer("dm", self.design_matrix(mp["context"]))
         self.Ny = self.dm.shape[1]
         self.method = method
+        self.entropy_factor = entropy_factor
         self.register_buffer("counts", mp["counts"].clone())
         self.context = mp["context"]
         self.context_u = np.unique(mp["context"])
@@ -185,14 +199,17 @@ class ContextModel(
         else:
             self.k_beta = None
 
-        if "disp" in mp and mp["disp"] is not None:
-            self.log_disp = nn.Parameter(tt(np.log(mp["disp"]), dtype=torch.float32))
-        elif fix_disp_val is None:
+        if fix_disp_val is None:
             self.log_disp = nn.Parameter(tt(-1.0))
         elif fix_disp_val == "context":
             self.log_disp = nn.Parameter(-torch.ones(self.Ny, 1))
         elif fix_disp_val == "gene":
-            self.log_disp = nn.Parameter(-torch.ones(self.Ng))
+            if "disp" in mp["params_g"].columns:
+                self.log_disp = nn.Parameter(
+                    tt(np.log(mp["params_g"]["disp"].values), dtype=torch.float32)
+                )
+            else:
+                self.log_disp = nn.Parameter(-torch.ones(self.Ng))
         else:
             self.log_disp = nn.Parameter(tt(np.log(fix_disp_val)))
             self.log_disp.requires_grad = False
@@ -214,6 +231,73 @@ class ContextModel(
         self.context_mode = context_mode
 
     set_context_mode = set_context_mode
+
+    @classmethod
+    def from_params_g(
+        cls,
+        params_g,
+        context_mode="none",
+        fix_phase=False,
+        noise_model="nb",
+        fix_disp_val="gene",
+        log_amp_fn="logit",
+        device="cpu",
+    ):
+        """
+        Initialize a ContextModel from gene parameters only, without adata.
+
+        Creates a model with gene parameters loaded from params_g but with
+        no real dataset attached.  Dataset-specific buffers (X, dm, counts)
+        are populated with dummy values for a single cell and are rebuilt
+        automatically when get_inferred_phases is called with real data
+        (the Nc-mismatch path in get_phase_posteriors handles this, but
+        requires context_mode="none" and explicit counts= argument).
+
+        Typical use:
+            params_g = sr.Beta("saved_params.csv")
+            cmodel = ContextModel.from_params_g(params_g)
+            # later, with real adata:
+            data_c, mp = assemble_mp(adata, params_g, labels=np.ones(Nc), ...)
+            cmodel.get_inferred_phases(data_c, counts=mp["counts"], n_theta=100)
+            bic_df = cmodel.fit_null_model(adata, counts=counts)
+
+        Args:
+            params_g      : Beta (or DataFrame) with columns a_0, amp, phase
+                            (and optionally disp for warm-start dispersion).
+            context_mode  : Must be "none" for inference on new data.
+            fix_phase     : Whether to fix acrophase parameters.
+            noise_model   : "nb" or "poisson".
+            fix_disp_val  : Dispersion mode (see __init__ docstring).
+            log_amp_fn    : "logit" or "log".
+            device        : Torch device string.
+        """
+        from scritmo import Beta
+
+        params_g = Beta(params_g)
+        Ng = len(params_g)
+
+        # minimal mp with a single dummy cell
+        mp = {
+            "params_g": params_g,
+            "context": np.array([1]),
+            "counts": torch.ones(1, 1, dtype=torch.float32, device=device),
+            "weights_g": None,
+            "k_beta": None,
+            "rhythmic_degradation": False,
+            "batch": None,
+        }
+        # dummy data tensor: (Nx=1, Nc=1, Ng)
+        y_dummy = torch.zeros(1, 1, Ng, dtype=torch.float32, device=device)
+
+        return cls(
+            mp,
+            y_dummy,
+            context_mode=context_mode,
+            fix_phase=fix_phase,
+            noise_model=noise_model,
+            fix_disp_val=fix_disp_val,
+            log_amp_fn=log_amp_fn,
+        )
 
     def forward(self, y, indices=slice(None), y_u=None, **kwargs):
         """
@@ -243,7 +327,6 @@ class ContextModel(
         ]
 
         # cells priors
-
         loss = tt(0.0, device=self.dev)
 
         # sum over genes, add here a weighted sum?
@@ -259,6 +342,21 @@ class ContextModel(
                 ll_xc, l_prior_xc, ll_e_xc, method=self.method, return_integrand=True
             )
             loss_like = -self.log_like_loss(l_c, max_c)
+
+            # optional phase-entropy regularizer: penalize a peaked marginal
+            # distribution of cells over the phase grid (encourages cells to
+            # spread around the circle, like CoPhaser's circular entropy term)
+            if self.entropy_factor:
+                # per-cell posterior over the grid (max_c shift cancels here)
+                p_xc = l_xc / (l_xc.sum(dim=0, keepdim=True) + 1e-10)  # (Nx, Nc)
+                q_x = p_xc.mean(dim=1)  # (Nx,) marginal phase distribution
+                q_x = q_x / (q_x.sum() + 1e-10)
+                H = -(q_x * (q_x + 1e-10).log()).sum()  # 0 .. log(Nx)
+                Nc = ll_xc.shape[1]
+                # scale by Nc so the term is commensurate with the cell-summed
+                # likelihood and entropy_factor is batch-size invariant
+                loss = loss - self.entropy_factor * Nc * H
+                self.last_entropy = H.item()
 
         loss_beta = -self.beta_prior()
         loss += loss_like + loss_beta * Nb
@@ -282,6 +380,7 @@ class ContextModel(
         return_all=False,
         counts=None,
         n_theta=None,
+        cell_chunk=None,
     ):
         """
         It gives you the posterior distribution of the phase
@@ -289,23 +388,18 @@ class ContextModel(
 
         Args:
             y: Data tensor
+            cell_chunk: if not None, process cells in chunks of this size to
+                bound peak GPU memory. The full-population log-likelihood tensor
+                scales as (n_theta, Nc, Ng); for large cell types this exceeds
+                GPU memory, so chunking over cells keeps it tractable. Results
+                are identical to the unchunked path (default None).
         Returns:
         """
         if self.fixed_cell_mode:
             raise RuntimeError("Cannot compute phase posteriors in fixed-phase mode.")
-        # in case I want to use a higher n_theta for phase resolution (differrent Nx)
-        if n_theta is not None:
-            # Use a higher n_theta for phase resolution
-            Nx = n_theta
 
-            # Repeat the data along the phase dimension
-            y = y[0, :, :].unsqueeze(0).repeat(n_theta, 1, 1)
-            if y_u is not None:
-                y_u = y_u[0, :, :].unsqueeze(0).repeat(n_theta, 1, 1)
-        else:
-            Nx = self.Nx
-
-        # in case I use a smaller or different dataset (different Nc)
+        # in case I use a smaller or different dataset (different Nc): rebuild the
+        # Nc-dependent buffers (cheap) before any per-chunk forward pass.
         if y.shape[1] != self.Nc:
             self.Nc = y.shape[1]
 
@@ -328,40 +422,67 @@ class ContextModel(
                 # adjust dm
                 self.register_buffer("dm", self.design_matrix(np.ones(self.Nc)))
 
-        # Run forward calculation without computing gradients
+        Nc_total = y.shape[1]
+        if cell_chunk is None or cell_chunk >= Nc_total:
+            cell_chunk = Nc_total
+
+        post_chunks, lmle_chunks = [], []
+
+        # Run forward calculation without computing gradients, chunking over cells
         with torch.no_grad():
-            dist = self.nb_dist(counts=counts, n_theta=n_theta)
-            ll_xcg = dist.log_prob(y)
+            for c0 in range(0, Nc_total, cell_chunk):
+                c1 = min(c0 + cell_chunk, Nc_total)
+                idx = slice(c0, c1)
 
-            if self.unspliced_mode:
-                if y_u is None:
-                    raise ValueError(
-                        "y_u (unspliced data) must be provided in unspliced_mode."
+                # build the (n_theta, chunk, Ng) data slice for this chunk
+                if n_theta is not None:
+                    y_c = y[0, idx, :].unsqueeze(0).repeat(n_theta, 1, 1)
+                    y_u_c = (
+                        y_u[0, idx, :].unsqueeze(0).repeat(n_theta, 1, 1)
+                        if y_u is not None
+                        else None
                     )
-                dist_u = self.nb_dist_unspliced(counts=counts, n_theta=n_theta)
-                ll_u_xcg = dist_u.log_prob(y_u)  # Unspliced log-likelihood
-                # the unspliced loss is added to the spliced one
-                ll_xcg = ll_xcg + ll_u_xcg  # Combine likelihoods
+                else:
+                    y_c = y[:, idx, :]
+                    y_u_c = y_u[:, idx, :] if y_u is not None else None
+                counts_c = counts[idx] if counts is not None else None
 
-            # cells priors
-            log_prior_xc = self.cell_prior()
+                dist = self.nb_dist(indices=idx, counts=counts_c, n_theta=n_theta)
+                ll_xcg = dist.log_prob(y_c)
 
-            # add here a weighted sum?
-            log_posterior_xc = (ll_xcg * self.weights_g).sum(2)  # + log_prior_xc
-            log_mle_c = (ll_xcg * self.weights_g).sum(2).max(0).values
-            posterior_xc = self.normalize_log_dist(log_posterior_xc, method=method)
+                if self.unspliced_mode:
+                    if y_u_c is None:
+                        raise ValueError(
+                            "y_u (unspliced data) must be provided in unspliced_mode."
+                        )
+                    dist_u = self.nb_dist_unspliced(
+                        indices=idx, counts=counts_c, n_theta=n_theta
+                    )
+                    ll_xcg = ll_xcg + dist_u.log_prob(y_u_c)
+
+                log_posterior_xc = (ll_xcg * self.weights_g).sum(2)  # + log_prior_xc
+                log_mle_c = log_posterior_xc.max(0).values
+                posterior_xc = self.normalize_log_dist(log_posterior_xc, method=method)
+
+                post_chunks.append(nmp(posterior_xc))
+                lmle_chunks.append(nmp(log_mle_c))
+
+        posterior_xc = np.concatenate(post_chunks, axis=1)
+        log_mle_c = np.concatenate(lmle_chunks, axis=0)
 
         if return_all:
-            l_xc = self.normalize_log_dist(
-                (ll_xcg * self.weights_g).sum(2), method=method
-            )
-            prior_xc = self.normalize_log_dist(log_prior_xc, method=method)
-            return (nmp(posterior_xc), nmp(l_xc), nmp(prior_xc), nmp(log_mle_c))
+            # with a flat phase prior l_xc is identical to posterior_xc; prior_xc
+            # is kept for API compatibility (unused by get_inferred_phases).
+            l_xc = posterior_xc
+            prior_xc = nmp(self.normalize_log_dist(self.cell_prior(), method=method))
+            return (posterior_xc, l_xc, prior_xc, log_mle_c)
 
         else:
-            return nmp(posterior_xc)
+            return posterior_xc
 
-    def get_inferred_phases(self, y, y_u=None, method="sum", counts=None, n_theta=None):
+    def get_inferred_phases(
+        self, y, y_u=None, method="sum", counts=None, n_theta=None, cell_chunk=None
+    ):
         """
         Wrapper around get_phase_posteriors to return just the posterior mean phases.
         it also stores the posterior mean, std and var as attributes
@@ -374,6 +495,7 @@ class ContextModel(
             return_all=True,
             counts=counts,
             n_theta=n_theta,
+            cell_chunk=cell_chunk,
         )
         post_mean_c, post_var_c, post_std_c = compute_posterior_statistics(posterior_xc)
         self.disp = nmp(self.log_disp.exp())
@@ -631,9 +753,13 @@ class ContextModel(
         return_sim_data=False,
         n_epochs_training=0,
         n_replicates=None,
+        seed_replicates: int = 42,
+        seed_sim: int | None = None,
         library_size_vec=None,
         n_sim_runs=1,
         return_posteriors=False,
+        use_circular_mean=False,
+        posterior_cell_chunk=None,
     ):
         """
         Wrapper around the simulate_cell_populations function.
@@ -652,9 +778,13 @@ class ContextModel(
             return_sim_data=return_sim_data,
             n_epochs_training=n_epochs_training,
             n_replicates=n_replicates,
+            seed_replicates=seed_replicates,
+            seed_sim=seed_sim,
             library_size_vec=library_size_vec,
             n_sim_runs=n_sim_runs,
             return_posteriors=return_posteriors,
+            use_circular_mean=use_circular_mean,
+            posterior_cell_chunk=posterior_cell_chunk,
         )
 
     def create_results_df(
@@ -708,12 +838,15 @@ class ContextModel(
         disp_function=cSTD,
         metrics: dict | None = None,
         n_replicates_real: int | None = None,
-        seed: int = 42,
+        seed_real: int = 42,
+        seed_sim: int | None = None,
         # --- Mode ---
         mode: str = "point_estimate",
         # --- Cell filtering / weighting ---
         post_std_threshold: float = np.inf,
         weight_by_post_std: bool = False,
+        # --- Simulation mean estimation ---
+        use_circular_mean: bool = False,
     ):
         """
         Orchestrates the estimation of phase desynchrony by:
@@ -803,8 +936,10 @@ class ContextModel(
                 return_sim_data=True,
                 n_epochs_training=n_epochs_training,
                 n_replicates=n_replicates_sim,
+                seed_sim=seed_sim,
                 library_size_vec=library_size_vec,
                 n_sim_runs=n_sim_runs,
+                use_circular_mean=use_circular_mean,
             )
 
             # 3a. Compute desynchrony from point estimates
@@ -816,7 +951,7 @@ class ContextModel(
                 post_estimator=post_estimator,
                 metrics=metrics,
                 n_replicates=n_replicates_real,
-                seed=seed,
+                seed=seed_real,
                 weight_col="post_std_c" if weight_by_post_std else None,
             )
 
@@ -840,9 +975,11 @@ class ContextModel(
                 return_sim_data=True,
                 n_epochs_training=n_epochs_training,
                 n_replicates=n_replicates_sim,
+                seed_sim=seed_sim,
                 library_size_vec=library_size_vec,
                 n_sim_runs=n_sim_runs,
                 return_posteriors=True,
+                use_circular_mean=use_circular_mean,
             )
 
             # 3b. Compute desynchrony from posterior mixtures
@@ -853,7 +990,7 @@ class ContextModel(
                 sim_posteriors_dict=sim_posteriors_dict,
                 group_cols=group_cols,
                 n_replicates=n_replicates_real,
-                seed=seed,
+                seed=seed_real,
             )
 
         else:

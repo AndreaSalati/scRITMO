@@ -175,6 +175,7 @@ def plot_circadian_data(
     rasterized=True,  # New parameter for rasterization
     remove_outliers=False,  # New parameter to remove outliers
     label="data",
+    rh=24 / (2 * np.pi),
 ):
     if ax is None:
         fig, ax = plt.subplots()
@@ -185,9 +186,6 @@ def plot_circadian_data(
         expression = expression.toarray().squeeze()
     except AttributeError:
         expression = expression.squeeze()
-
-    # Factor to convert radians to hours (assuming 24h cycle)
-    rh = 24 / (2 * np.pi)
 
     if boxplot:
         # 1. Group expression by unique phase values
@@ -285,6 +283,8 @@ def plot_circadian_data_and_fit(
     boxplot=False,  # New parameter
     rasterized=True,  # New parameter for rasterization
     remove_outliers=False,  # New parameter to remove outliers
+    rh=24 / (2 * np.pi),
+    wrap=True,  # assumes that data is modulo 24h and wraps around at 0/24h (if False, uses raw time values for plotting)
 ):
     """
     Creates a plot of circadian expression data and GLM fit, returning an axis object.
@@ -328,7 +328,10 @@ def plot_circadian_data_and_fit(
     )
 
     # Now add the GLM fit
-    phi_x = np.linspace(0, 2 * np.pi, 100)
+    if wrap:
+        phi_x = np.linspace(0, 2 * np.pi, 100)
+    else:
+        phi_x = np.linspace(phis.min(), phis.max(), 100)
 
     params_g = Beta(params_g)
     y = params_g.predict(phi_x, exp_base=exp)

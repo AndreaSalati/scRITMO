@@ -282,7 +282,6 @@ def assemble_mp(
     params_g,
     labels,
     counts=None,
-    params_e_g=None,
     layer="spliced",
     n_theta=24,
     device="cuda",
@@ -302,8 +301,6 @@ def assemble_mp(
         Array with the counts for each cell.
     labels : np.ndarray
         Array with the labels for each cell.
-    params_e_g: pd.DataFrame
-        DataFrame with the model parameters for each extra gene.
     layer : str
         Layer to use for the data. If None, use adata.X.
     n_theta : int
@@ -372,34 +369,10 @@ def assemble_mp(
     )
     mp["params_g"] = Beta(params_g)
 
-    if params_e_g is not None:
-        mp["params_e_g"] = Beta(params_e_g)
-        Neg = params_e_g.shape[0]
-        # check if the contexts in params_e_g and labels match
-        ctu_g = np.unique(params_e_g.context.values)
-        ctu_c = np.unique(labels)
-        check_value = len(ctu_g) == len(ctu_c) and np.all(ctu_g == ctu_c)
-        if not check_value:
-            print(
-                "Warning: contexts in params_e_g and labels do not match. "
-                "This may lead to unexpected results."
-            )
-
     mp["context"] = np.array(labels)
 
-    if params_e_g is not None:
-        data_e_c = torch.tensor(
-            adata[:, params_e_g.index].layers[layer].toarray(),
-            dtype=torch.float32,
-            device=device,
-        )
-        data_e_c = data_e_c.unsqueeze(0).expand(n_theta, Nc, Neg)
-        if unspliced_layer is not None:
-            raise ValueError("Unspliced layer is not supported for extra genes.")
-        return data_c, mp, data_e_c
-
-    else:
-        if unspliced_layer is not None:
-            mp["counts_u"] = None
-            return data_c, mp, data_u_c
-        return data_c, mp
+    if unspliced_layer is not None:
+        mp["counts_u"] = None
+        return data_c, mp, data_u_c
+    
+    return data_c, mp

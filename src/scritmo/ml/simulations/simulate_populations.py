@@ -43,6 +43,7 @@ def _infer_phases_for_context(
     s_true_time: list,
     n_epochs_training: int = 0,
     return_posteriors: bool = False,
+    posterior_cell_chunk: int | None = None,
 ):
     """
     Performs phase inference and returns structured results as a list of dictionaries.
@@ -85,7 +86,9 @@ def _infer_phases_for_context(
         plt.ylabel("Loss")
         plt.show()
 
-    _ = model_y.get_inferred_phases(data_c, n_theta=100)
+    _ = model_y.get_inferred_phases(
+        data_c, n_theta=100, cell_chunk=posterior_cell_chunk
+    )
 
     # Capture both mean and standard deviation
     post_mean_c = model_y.post_mean_c
@@ -132,10 +135,13 @@ def simulate_cell_populations(
     return_sim_data=False,
     n_epochs_training=0,
     n_replicates: int | None = None,
-    seed: int = 42,
+    seed_replicates: int = 42,
+    seed_sim: int | None = None,
     library_size_vec: np.ndarray | None = None,
     n_sim_runs: int = 5,  # NEW: Number of "Twin" simulations to run
     return_posteriors: bool = False,
+    use_circular_mean: bool = False,
+    posterior_cell_chunk: int | None = None,
 ):
     # --- 1. Initial Setup ---
     fourier_coefficients_y = cmodel.get_parameter_dataframe_context(
@@ -160,11 +166,18 @@ def simulate_cell_populations(
         adata.obs[ext_time_label], period=period, convert_rad=True
     )
 
+    if use_circular_mean:
+        obs["inferred_phase"] = cmodel.post_mode_c
+
+    if seed_sim is not None:
+        torch.manual_seed(seed_sim)
+        np.random.seed(seed_sim)
+
     # Replicate assignment logic
     base_group_by_cols = [context_col, sample_label]
     if n_replicates is not None:
         obs["replicate"] = assign_replicates(
-            obs, base_group_by_cols, n_replicates, seed
+            obs, base_group_by_cols, n_replicates, seed_replicates
         )
         group_by_cols = base_group_by_cols + ["replicate"]
     else:
@@ -200,7 +213,12 @@ def simulate_cell_populations(
 
             df_obs_group = obs.loc[mask]
             library_size_group = df_obs_group["library_size"].values
-            ext_time_mean = df_obs_group["ext_time_rad"].values[0]
+            if use_circular_mean:
+                ext_time_mean = circmean(
+                    df_obs_group["inferred_phase"].values, high=2 * np.pi, low=0
+                )
+            else:
+                ext_time_mean = df_obs_group["ext_time_rad"].values[0]
 
             if len(library_size_group) == 0:
                 continue
@@ -274,6 +292,7 @@ def simulate_cell_populations(
                 s_true_time=ctx_true_times,
                 n_epochs_training=n_epochs_training,
                 return_posteriors=return_posteriors,
+                posterior_cell_chunk=posterior_cell_chunk,
             )
             if return_posteriors:
                 context_results, ctx_posterior_xc = infer_result
