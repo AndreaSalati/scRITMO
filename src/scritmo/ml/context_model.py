@@ -24,7 +24,6 @@ from scritmo import (
     mean_AE,
 )
 from scritmo import median_dispersion, cSTD
-from .simulations.estimate_desynchrony import estimate_desynchrony
 from .simulations.simulate_populations import simulate_cell_populations
 from .ensemble import EnsembleMixin
 from .unspliced.unspliced_deg import UnsplicedMixin
