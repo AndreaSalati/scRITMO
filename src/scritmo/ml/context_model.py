@@ -33,6 +33,7 @@ from .analysis_utils import (
     desync_results,
     desync_means,
     desync_results_posterior,
+    aggregate_technical_rao,
 )
 from .genome_fit import GenomeFitMixin
 from .desync_mixin import DesynchronyMixin
@@ -811,6 +812,56 @@ class ContextModel(
             allow_flip=allow_flip,
         )
 
+    def sigma_tech_rao_per_cell(self, adata, theta=None, layer="spliced"):
+        """Analytic Cramér–Rao σ_tech (radians) per cell, from the fitted gene template β̂.
+
+        The cheap, simulation-free counterpart of the `simulate_cell_populations(kappa=∞)` twin:
+        σ_tech = 1/√(Fisher information of phase) under the NB single-harmonic model (see
+        `scritmo.ml.cramer_rao`). v1 supports `context_mode="none"` only.
+
+        Parameters
+        ----------
+        adata : AnnData
+            Cells to evaluate; the size factor s is `adata[:, self.genes].layers[layer].sum(1)`
+            (aligned to adata rows). Must contain all model genes.
+        theta : np.ndarray, optional
+            Per-cell phase [rad] at which to evaluate the floor. Defaults to the model's MAP
+            (`self.post_mode_c`); pass e.g. the sample external time for a synchronized floor.
+        layer : str, default "spliced"
+            Layer used for the per-cell size factor.
+
+        Returns
+        -------
+        np.ndarray, shape (n_obs,)
+            σ_tech per cell in radians.
+        """
+        from .cramer_rao import sigma_tech_rao_per_cell
+
+        if self.context_mode != "none":
+            raise NotImplementedError(
+                "sigma_tech_rao_per_cell currently supports context_mode='none' only "
+                f"(got '{self.context_mode}'). Use sigma_tech_method='simulation' for "
+                "multi-context models."
+            )
+
+        A = nmp(self._amp_s()).reshape(-1)
+        phi = nmp(self.acrophase).reshape(-1)
+        a0 = nmp(self.m_g).reshape(-1)
+        disp = nmp(self.log_disp.exp()).reshape(-1)
+        if disp.ndim == 0 or disp.size == 1:
+            disp = np.full_like(A, float(disp))
+
+        adata_sub = adata[:, self.genes]
+        X = adata_sub.layers[layer] if layer in adata_sub.layers else adata_sub.X
+        s = np.asarray(X.sum(axis=1)).reshape(-1).astype(float)
+
+        if theta is None:
+            theta = np.asarray(self.post_mode_c, dtype=float).reshape(-1)
+        else:
+            theta = np.asarray(theta, dtype=float).reshape(-1)
+
+        return sigma_tech_rao_per_cell(A, phi, a0, disp, theta, s)
+
     def estimate_phase_desynchrony(
         self,
         adata,
@@ -842,6 +893,9 @@ class ContextModel(
         seed_sim: int | None = None,
         # --- Mode ---
         mode: str = "point_estimate",
+        # --- Technical floor method ---
+        sigma_tech_method: str = "simulation",
+        rao_phase: str = "map",
         # --- Cell filtering / weighting ---
         post_std_threshold: float = np.inf,
         weight_by_post_std: bool = False,
@@ -904,6 +958,33 @@ class ContextModel(
         )
         self.result_df = df_real
 
+        # 1a-bis. Cramér–Rao technical floor: attach the analytic per-cell sigma_tech BEFORE the
+        # post_std filter so it survives the same mask. Replaces the simulation twin below.
+        if sigma_tech_method == "cramer_rao":
+            if mode != "point_estimate":
+                raise ValueError(
+                    "sigma_tech_method='cramer_rao' supports mode='point_estimate' only."
+                )
+            if rao_phase == "map":
+                theta_rao = None  # sigma_tech_rao_per_cell defaults to self.post_mode_c
+            elif rao_phase == "ext_time":
+                # model-frame synchronized phase per sample = circular mean of that sample's MAP
+                # (a gauge-consistent stand-in for the sample external time; avoids mixing the
+                # external frame with the model-frame acrophases).
+                from scipy.stats import circmean
+
+                _pm = np.asarray(self.post_mode_c, dtype=float).reshape(-1)
+                _samp = adata.obs[sample_col].astype(str).values
+                theta_rao = np.empty_like(_pm)
+                for _sv in np.unique(_samp):
+                    _m = _samp == _sv
+                    theta_rao[_m] = circmean(_pm[_m], high=2 * np.pi, low=0)
+            else:
+                raise ValueError(f"Unknown rao_phase '{rao_phase}'. Use 'map' or 'ext_time'.")
+            df_real["sigma_tech_rao"] = self.sigma_tech_rao_per_cell(
+                adata, theta=theta_rao, layer=layer
+            )
+
         # 1b. Filter cells by posterior uncertainty
         if post_std_threshold < np.inf and "post_std_c" in df_real.columns:
             mask = df_real["post_std_c"] <= post_std_threshold
@@ -922,31 +1003,43 @@ class ContextModel(
             cell_keep_idx = None
 
         if mode == "point_estimate":
-            # 2a. Simulate (point estimates only)
-            df_sim = self.simulate_cell_populations(
-                adata=adata,
-                context_col=context_col,
-                n_cells=n_cells,
-                layer_to_use=layer,
-                ext_time_label=ext_time_col,
-                sample_label=sample_col,
-                kappa=np.inf,
-                period=period,
-                device=device,
-                return_sim_data=True,
-                n_epochs_training=n_epochs_training,
-                n_replicates=n_replicates_sim,
-                seed_sim=seed_sim,
-                library_size_vec=library_size_vec,
-                n_sim_runs=n_sim_runs,
-                use_circular_mean=use_circular_mean,
-                posterior_cell_chunk=posterior_cell_chunk,
-            )
+            if sigma_tech_method == "cramer_rao":
+                # 2a'. Analytic technical floor (no simulation twin) -> per-(context, sample) table
+                tech_agg = aggregate_technical_rao(
+                    df_real,
+                    group_cols=group_cols if group_cols is not None
+                    else ["context", "sample_name"],
+                    sigma_col="sigma_tech_rao",
+                )
+                df_sim = None
+            else:
+                # 2a. Simulate (point estimates only)
+                df_sim = self.simulate_cell_populations(
+                    adata=adata,
+                    context_col=context_col,
+                    n_cells=n_cells,
+                    layer_to_use=layer,
+                    ext_time_label=ext_time_col,
+                    sample_label=sample_col,
+                    kappa=np.inf,
+                    period=period,
+                    device=device,
+                    return_sim_data=True,
+                    n_epochs_training=n_epochs_training,
+                    n_replicates=n_replicates_sim,
+                    seed_sim=seed_sim,
+                    library_size_vec=library_size_vec,
+                    n_sim_runs=n_sim_runs,
+                    use_circular_mean=use_circular_mean,
+                    posterior_cell_chunk=posterior_cell_chunk,
+                )
+                tech_agg = None
 
-            # 3a. Compute desynchrony from point estimates
+            # 3a. Compute desynchrony from point estimates (sim_agg short-circuits the twin)
             df_final = desync_results(
                 df_real=df_real,
                 df_sim=df_sim,
+                sim_agg=tech_agg,
                 group_cols=group_cols,
                 disp_function=disp_function,
                 post_estimator=post_estimator,

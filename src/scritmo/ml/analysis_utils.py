@@ -87,11 +87,18 @@ def desync_results(
     ext_time_col: str = "ext_time",
     # weighting
     weight_col: str | None = None,
+    # precomputed technical floor (Cramér–Rao branch): if given, df_sim is ignored and this
+    # per-(context, sample) table supplies Technical_cSTD/Technical_R directly.
+    sim_agg: pd.DataFrame | None = None,
 ):
     """
     First it aggregates data by calling aggregate_real_results and aggregate_simulated_results,
     then fuses the 2 in one dataframe. Finally it computes the
     biological desynchrony with the quadrature difference.
+
+    `sim_agg` lets a caller bypass the simulation twin: pass a precomputed technical table (same
+    schema as `aggregate_simulated_results`: context, sample_name, Technical_cSTD[rad], Technical_R)
+    and `df_sim` is not used. This is the analytic Cramér–Rao path (`aggregate_technical_rao`).
 
     TO BE FIXED: Currently the group cols can only be two: context and sample_name.
     columns with another names will create problems
@@ -115,14 +122,15 @@ def desync_results(
         weight_col=weight_col,
     )
 
-    sim_agg = aggregate_simulated_results(
-        df_sim,
-        # group_cols=group_cols,
-        disp_function=disp_function,
-        post_estimator=post_estimator,
-        ext_time_col=ext_time_col,
-        weight_col="post_std" if weight_col is not None else None,
-    )
+    if sim_agg is None:
+        sim_agg = aggregate_simulated_results(
+            df_sim,
+            # group_cols=group_cols,
+            disp_function=disp_function,
+            post_estimator=post_estimator,
+            ext_time_col=ext_time_col,
+            weight_col="post_std" if weight_col is not None else None,
+        )
 
     # 2. Initialize Mixed DataFrame
     df_mixed = real_agg.copy()
@@ -430,6 +438,32 @@ def aggregate_simulated_results(
     # Add the R conversion if needed
     final_stats["Technical_R"] = cstd2R(final_stats["Technical_cSTD"])
 
+    return final_stats
+
+
+def aggregate_technical_rao(
+    df_real: pd.DataFrame,
+    group_cols: list = None,
+    sigma_col: str = "sigma_tech_rao",
+):
+    """Aggregate the per-cell analytic Cramér–Rao σ_tech into a per-(context, sample) technical
+    floor, with the SAME output schema as `aggregate_simulated_results` (context, sample_name,
+    Technical_cSTD[rad], Technical_R) so `desync_results(..., sim_agg=...)` consumes it unchanged.
+
+    Sample-level Technical_cSTD is the circular-mixture spread of the per-cell wrapped-normal MAP
+    estimators (`cramer_rao.technical_cstd_rao`): R̄ = mean_i exp(−σ_i²/2), cSTD = √(−2 ln R̄).
+    """
+    from .cramer_rao import technical_cstd_rao
+
+    if group_cols is None:
+        group_cols = ["context", "sample_name"]
+
+    final_stats = (
+        df_real.groupby(group_cols)[sigma_col]
+        .apply(lambda s: technical_cstd_rao(s.values))
+        .reset_index(name="Technical_cSTD")
+    )
+    final_stats["Technical_R"] = cstd2R(final_stats["Technical_cSTD"])
     return final_stats
 
 
