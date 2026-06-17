@@ -41,7 +41,7 @@ from .null_model import NullModelMixin
 circSTD = partial(cSTD, adjust=True)
 
 
-class ContextModel(
+class Scritmo(
     nn.Module,
     DesynchronyMixin,
     EnsembleMixin,
@@ -254,7 +254,7 @@ class ContextModel(
 
         Typical use:
             params_g = sr.Beta("saved_params.csv")
-            cmodel = ContextModel.from_params_g(params_g)
+            cmodel = Scritmo.from_params_g(params_g)
             # later, with real adata:
             data_c, mp = assemble_mp(adata, params_g, labels=np.ones(Nc), ...)
             cmodel.get_inferred_phases(data_c, counts=mp["counts"], n_theta=100)
@@ -1091,3 +1091,7 @@ def compute_nb_params(
 
 def compute_poisson_rate(E_xcg: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
     return torch.exp(E_xcg) * counts
+
+
+# Backward-compatible alias (historical name). Keep for old pickles & existing imports.
+ContextModel = Scritmo
