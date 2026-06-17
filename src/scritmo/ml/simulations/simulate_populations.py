@@ -42,7 +42,6 @@ def _infer_phases_for_context(
     s_ext_time: list,
     s_true_time: list,
     n_epochs_training: int = 0,
-    return_posteriors: bool = False,
     posterior_cell_chunk: int | None = None,
 ):
     """
@@ -94,7 +93,6 @@ def _infer_phases_for_context(
     post_mean_c = model_y.post_mean_c
     post_std_c = model_y.post_std_c
     post_mode_c = model_y.post_mode_c
-    posterior_xc = model_y.posterior_xc if return_posteriors else None
 
     # Build the list of dictionaries
     # myabe call the utils function here create_results_dataframe
@@ -116,8 +114,6 @@ def _infer_phases_for_context(
     del model_y, data_c
     torch.cuda.empty_cache()
 
-    if return_posteriors:
-        return results, posterior_xc
     return results
 
 
@@ -139,7 +135,6 @@ def simulate_cell_populations(
     seed_sim: int | None = None,
     library_size_vec: np.ndarray | None = None,
     n_sim_runs: int = 5,  # NEW: Number of "Twin" simulations to run
-    return_posteriors: bool = False,
     use_circular_mean: bool = False,
     posterior_cell_chunk: int | None = None,
 ):
@@ -184,9 +179,6 @@ def simulate_cell_populations(
         group_by_cols = base_group_by_cols
 
     all_results_list = []
-    all_posteriors_list = [] if return_posteriors else None  # (Nx, N_cells) per context
-    all_posterior_sample_names = [] if return_posteriors else None
-    all_posterior_contexts = [] if return_posteriors else None
     unique_contexts = obs[context_col].unique()
 
     # --- 2. NESTED LOOP: Context (Outer) -> Samples (Inner) ---
@@ -280,7 +272,7 @@ def simulate_cell_populations(
 
         # --- 3. Batch Inference for the whole Context ---
         if ctx_gen_data:
-            infer_result = _infer_phases_for_context(
+            context_results = _infer_phases_for_context(
                 generated_data=np.concatenate(ctx_gen_data, axis=0),
                 library_sizes=np.concatenate(ctx_lib_sizes, axis=0),
                 fourier_coefficients=fourier_coefficients_y[context_label],
@@ -291,41 +283,14 @@ def simulate_cell_populations(
                 s_ext_time=ctx_ext_times,
                 s_true_time=ctx_true_times,
                 n_epochs_training=n_epochs_training,
-                return_posteriors=return_posteriors,
                 posterior_cell_chunk=posterior_cell_chunk,
             )
-            if return_posteriors:
-                context_results, ctx_posterior_xc = infer_result
-                all_posteriors_list.append(ctx_posterior_xc)
-                all_posterior_sample_names.extend(ctx_sample_names)
-                all_posterior_contexts.extend([context_label] * len(ctx_sample_names))
-            else:
-                context_results = infer_result
             all_results_list.extend(context_results)
 
     # --- 4. Finalize ---
     if not all_results_list:
-        empty_df = pd.DataFrame(
+        return pd.DataFrame(
             columns=["post_mean", "post_mode", "post_std", "context", "sample_name"]
         )
-        if return_posteriors:
-            return empty_df, {
-                "posterior_xc": np.empty((0, 0)),
-                "sample_name": [],
-                "context": [],
-            }
-        return empty_df
 
-    df = pd.DataFrame(all_results_list)
-
-    if return_posteriors:
-        posteriors_dict = {
-            "posterior_xc": np.concatenate(
-                all_posteriors_list, axis=1
-            ),  # (Nx, N_total)
-            "sample_name": all_posterior_sample_names,
-            "context": all_posterior_contexts,
-        }
-        return df, posteriors_dict
-
-    return df
+    return pd.DataFrame(all_results_list)

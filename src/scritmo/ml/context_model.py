@@ -32,7 +32,6 @@ from .analysis_utils import (
     create_results_dataframe,
     desync_results,
     desync_means,
-    desync_results_posterior,
     aggregate_technical_rao,
 )
 from .genome_fit import GenomeFitMixin
@@ -757,7 +756,6 @@ class ContextModel(
         seed_sim: int | None = None,
         library_size_vec=None,
         n_sim_runs=1,
-        return_posteriors=False,
         use_circular_mean=False,
         posterior_cell_chunk=None,
     ):
@@ -782,7 +780,6 @@ class ContextModel(
             seed_sim=seed_sim,
             library_size_vec=library_size_vec,
             n_sim_runs=n_sim_runs,
-            return_posteriors=return_posteriors,
             use_circular_mean=use_circular_mean,
             posterior_cell_chunk=posterior_cell_chunk,
         )
@@ -891,8 +888,6 @@ class ContextModel(
         n_replicates_real: int | None = None,
         seed_real: int = 42,
         seed_sim: int | None = None,
-        # --- Mode ---
-        mode: str = "point_estimate",
         # --- Technical floor method ---
         sigma_tech_method: str = "simulation",
         rao_phase: str = "map",
@@ -939,11 +934,6 @@ class ContextModel(
                     "Please specify the context_col argument."
                 )
 
-        # For posterior_mixture: run inference first so that post_std_c in df_real
-        # is always aligned with the passed adata (handles pre-trained loaded models).
-        if mode == "posterior_mixture":
-            self._infer_on_adata(adata, layer=layer, device=device)
-
         # 1. Generate Real Results DataFrame
         df_real = self.create_results_df(
             adata=adata,
@@ -961,10 +951,6 @@ class ContextModel(
         # 1a-bis. Cramér–Rao technical floor: attach the analytic per-cell sigma_tech BEFORE the
         # post_std filter so it survives the same mask. Replaces the simulation twin below.
         if sigma_tech_method == "cramer_rao":
-            if mode != "point_estimate":
-                raise ValueError(
-                    "sigma_tech_method='cramer_rao' supports mode='point_estimate' only."
-                )
             if rao_phase == "map":
                 theta_rao = None  # sigma_tech_rao_per_cell defaults to self.post_mode_c
             elif rao_phase == "ext_time":
@@ -990,7 +976,6 @@ class ContextModel(
             mask = df_real["post_std_c"] <= post_std_threshold
             n_before = len(df_real)
             df_real = df_real[mask].copy()
-            cell_keep_idx = np.where(mask.values)[0]
             print(
                 f"  post_std_threshold={post_std_threshold:.3f} rad: "
                 f"kept {len(df_real)}/{n_before} cells"
@@ -999,64 +984,19 @@ class ContextModel(
                 raise ValueError(
                     f"post_std_threshold={post_std_threshold} filtered out all cells."
                 )
-        else:
-            cell_keep_idx = None
 
-        if mode == "point_estimate":
-            if sigma_tech_method == "cramer_rao":
-                # 2a'. Analytic technical floor (no simulation twin) -> per-(context, sample) table
-                tech_agg = aggregate_technical_rao(
-                    df_real,
-                    group_cols=group_cols if group_cols is not None
-                    else ["context", "sample_name"],
-                    sigma_col="sigma_tech_rao",
-                )
-                df_sim = None
-            else:
-                # 2a. Simulate (point estimates only)
-                df_sim = self.simulate_cell_populations(
-                    adata=adata,
-                    context_col=context_col,
-                    n_cells=n_cells,
-                    layer_to_use=layer,
-                    ext_time_label=ext_time_col,
-                    sample_label=sample_col,
-                    kappa=np.inf,
-                    period=period,
-                    device=device,
-                    return_sim_data=True,
-                    n_epochs_training=n_epochs_training,
-                    n_replicates=n_replicates_sim,
-                    seed_sim=seed_sim,
-                    library_size_vec=library_size_vec,
-                    n_sim_runs=n_sim_runs,
-                    use_circular_mean=use_circular_mean,
-                    posterior_cell_chunk=posterior_cell_chunk,
-                )
-                tech_agg = None
-
-            # 3a. Compute desynchrony from point estimates (sim_agg short-circuits the twin)
-            df_final = desync_results(
-                df_real=df_real,
-                df_sim=df_sim,
-                sim_agg=tech_agg,
-                group_cols=group_cols,
-                disp_function=disp_function,
-                post_estimator=post_estimator,
-                metrics=metrics,
-                n_replicates=n_replicates_real,
-                seed=seed_real,
-                weight_col="post_std_c" if weight_by_post_std else None,
+        if sigma_tech_method == "cramer_rao":
+            # 2a'. Analytic technical floor (no simulation twin) -> per-(context, sample) table
+            tech_agg = aggregate_technical_rao(
+                df_real,
+                group_cols=group_cols if group_cols is not None
+                else ["context", "sample_name"],
+                sigma_col="sigma_tech_rao",
             )
-
-        elif mode == "posterior_mixture":
-            # posterior_xc is already populated by _infer_on_adata called above
-            real_posterior_xc = self.posterior_xc
-            if cell_keep_idx is not None:
-                real_posterior_xc = real_posterior_xc[:, cell_keep_idx]
-
-            # 2b. Simulate and return full posteriors
-            df_sim, sim_posteriors_dict = self.simulate_cell_populations(
+            df_sim = None
+        else:
+            # 2a. Simulate the technical twin (point estimates only)
+            df_sim = self.simulate_cell_populations(
                 adata=adata,
                 context_col=context_col,
                 n_cells=n_cells,
@@ -1072,76 +1012,26 @@ class ContextModel(
                 seed_sim=seed_sim,
                 library_size_vec=library_size_vec,
                 n_sim_runs=n_sim_runs,
-                return_posteriors=True,
                 use_circular_mean=use_circular_mean,
                 posterior_cell_chunk=posterior_cell_chunk,
             )
+            tech_agg = None
 
-            # 3b. Compute desynchrony from posterior mixtures
-            df_final = desync_results_posterior(
-                df_real=df_real,
-                real_posterior_xc=real_posterior_xc,
-                df_sim=df_sim,
-                sim_posteriors_dict=sim_posteriors_dict,
-                group_cols=group_cols,
-                n_replicates=n_replicates_real,
-                seed=seed_real,
-            )
-
-        else:
-            raise ValueError(
-                f"Unknown mode '{mode}'. Choose 'point_estimate' or 'posterior_mixture'."
-            )
+        # 3a. Compute desynchrony from point estimates (sim_agg short-circuits the twin)
+        df_final = desync_results(
+            df_real=df_real,
+            df_sim=df_sim,
+            sim_agg=tech_agg,
+            group_cols=group_cols,
+            disp_function=disp_function,
+            post_estimator=post_estimator,
+            metrics=metrics,
+            n_replicates=n_replicates_real,
+            seed=seed_real,
+            weight_col="post_std_c" if weight_by_post_std else None,
+        )
 
         return df_final
-
-    def _infer_on_adata(
-        self, adata, layer: str = "spliced", device: str = "cpu", n_theta: int = 100
-    ):
-        """
-        Run get_inferred_phases on an AnnData object, populating posterior_xc.
-
-        Used by estimate_phase_desynchrony(mode='posterior_mixture') to ensure
-        self.posterior_xc is aligned with the provided adata.
-
-        Parameters
-        ----------
-        adata : AnnData
-            Must contain all genes in self.genes (or a superset).
-        layer : str
-            Layer to use for count data.
-        device : str
-            Torch device.
-        n_theta : int
-            Phase grid resolution for posteriors.
-        """
-        import scipy.sparse
-
-        # Extract count matrix for model genes
-        missing = np.setdiff1d(self.genes, adata.var_names)
-        if len(missing) > 0:
-            raise ValueError(
-                f"adata is missing {len(missing)} model genes (e.g. {missing[:3]}). "
-                "Ensure adata contains all genes the model was trained on."
-            )
-        adata_sub = adata[:, self.genes]
-
-        if layer in adata_sub.layers:
-            X = adata_sub.layers[layer]
-        else:
-            X = adata_sub.X
-        if scipy.sparse.issparse(X):
-            X = X.toarray()
-        X = np.array(X, dtype=np.float32)
-
-        lib_sizes = X.sum(axis=1, keepdims=True).astype(np.float32)
-
-        data_c = torch.tensor(X, dtype=torch.float32, device=device)
-        data_c = data_c.unsqueeze(0).expand(n_theta, -1, -1)
-        counts_c = torch.tensor(lib_sizes, dtype=torch.float32, device=device)
-
-        self.to(device)
-        self.get_inferred_phases(data_c, n_theta=n_theta, counts=counts_c)
 
     def X_matrix(self, fixed_cell_mode, n_theta=None, mp=None):
 

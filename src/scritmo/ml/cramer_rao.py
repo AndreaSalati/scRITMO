@@ -73,7 +73,7 @@ def technical_cstd_rao(sigma_rad):
     is the resultant of the mixture: R̄ = mean_i exp(−σ_i²/2), Technical_cSTD = √(−2·ln R̄). This
     is bounded as the information → 0 (trough cells: σ_i→∞ ⇒ R_i→0, contributing maximal spread
     without blowing up), and reduces to the quadrature/RMS mean √(mean σ_i²) in the small-angle
-    limit. Mirrors `analysis_utils.cSTD_posterior_mixture`.
+    limit (the same mixture-of-posteriors logic the simulation twin's circstd follows).
     """
     sigma_rad = np.asarray(sigma_rad, dtype=float)
     # cstd2R(∞)=0 ⇒ trough/zero-info cells correctly contribute maximal spread (not dropped);
