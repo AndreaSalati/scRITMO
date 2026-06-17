@@ -52,8 +52,40 @@ class Scritmo(
     NullModelMixin,
 ):
     """
-    A deterministic model that uses Simpson's rule for integration
-    and focuses only on the loss term involving marginalize_theta.
+    scRITMO circadian phase-inference model for single-cell RNA-seq.
+
+    Each gene is modeled as a harmonic (Fourier) function of an unobserved
+    circadian phase, with Negative-Binomial (or Poisson) counts. Per-cell phases
+    are not point parameters: the likelihood is marginalized over a fixed phase
+    grid (``Nx`` points on the circle, integrated with Simpson's rule or a plain
+    sum), which yields a full posterior over phase for every cell. Gene
+    parameters fit during training are the log-mesor (``m_g``), the harmonic
+    acrophase (``acrophase``) and amplitude (``log_amp``), plus dispersion.
+
+    The model is a composition of ``nn.Module`` and several mixins, each adding a
+    family of methods:
+      - ``MarginalizationMixin``  — the marginal likelihood / training loss.
+      - ``DesynchronyMixin``      — marginal-likelihood desynchrony (``estimate_sigma``).
+      - ``EnsembleMixin``         — feature-bagged (gene-subset) ensembles.
+      - ``UnsplicedMixin``        — joint spliced/unspliced modeling.
+      - ``FisherUncertaintyMixin``— Fisher/Cramér–Rao per-cell phase uncertainty.
+      - ``GenomeFitMixin``        — genome-wide gene refitting at fixed phases.
+      - ``NullModelMixin``        — flat-amplitude null NB fit for comparison.
+
+    Optional features (selected via the ``mp`` dict and ``context_mode``): per-
+    context intercepts/amplitude scaling, batch-effect phase shifts, a soft
+    Von-Mises prior on the acrophases (``k_beta``), per-gene weights, fixed-phase
+    inference, and a phase-entropy regularizer.
+
+    Construct directly with ``Scritmo(mp, y, ...)``, via the
+    :meth:`from_params_g` classmethod, or (most commonly) through
+    ``scritmo.ml.warmup_and_train(...)``, which assembles ``mp``/``y`` and returns
+    a trained instance.
+
+    Note
+    ----
+    ``ContextModel`` is a backward-compatible alias for this class (its historical
+    name); the two are the same object.
     """
 
     def __init__(
@@ -69,11 +101,28 @@ class Scritmo(
         entropy_factor=None,
     ):
         """
-        Initialize the context model with flexible context effects.
+        Initialize the Scritmo model from an assembled parameter/data bundle.
+
+        Most callers do not build ``mp``/``y`` by hand — they use
+        ``scritmo.ml.warmup_and_train(...)`` (or :meth:`from_params_g`), which
+        assembles them and returns a trained model.
 
         Args:
-            mp: Model parameters dictionary with initial values
-            y: Data tensor of shape [Nx, Nc, Ng]
+            mp: Model-parameters dict holding initial values and data. Required keys:
+                - "params_g": a ``Beta`` DataFrame with columns "a_0" (log-mesor),
+                  "amp", "phase" — seeds the gene parameters and the harmonic order.
+                - "counts": per-cell library sizes, shape [Nc].
+                - "context": per-cell context labels, shape [Nc] (the design matrix
+                  is built from these).
+                Optional keys:
+                - "phi_init": acrophase initialization decoupled from the prior
+                  center (lets phi_g start away from the reference template).
+                - "k_beta": concentration of the soft Von-Mises prior on acrophases.
+                - "batch", "kappa_b", "phi_b", "fixed_prior": batch-effect phase shifts.
+                - "weights_g": per-gene loss weights, shape [Ng].
+                - "fixed_cell_phases": if given, run in fixed-cell-phase mode (Nx=1).
+                - "unspliced_mode": enable joint spliced/unspliced modeling.
+            y: Data tensor of shape [Nx, Nc, Ng] (phase grid × cells × genes).
             context_mode: String controlling which context effects to use
                 - "none": No context effects (baseline model)
                 - "intercept": Only use category-specific intercepts (m_yg)
@@ -819,8 +868,11 @@ class Scritmo(
         Parameters
         ----------
         adata : AnnData
-            Cells to evaluate; the size factor s is `adata[:, self.genes].layers[layer].sum(1)`
-            (aligned to adata rows). Must contain all model genes.
+            Cells to evaluate. The size factor s is `self.counts` (the size factor the model was
+            actually fit with -- e.g. area-corrected for smFISH, NOT necessarily the panel-count
+            sum) when it aligns with adata (n_obs match); otherwise it falls back to
+            `adata[:, self.genes].layers[layer].sum(1)`. Using `self.counts` keeps μ consistent
+            with the fitted `a_0`. Must contain all model genes.
         theta : np.ndarray, optional
             Per-cell phase [rad] at which to evaluate the floor. Defaults to the model's MAP
             (`self.post_mode_c`); pass e.g. the sample external time for a synchronized floor.
@@ -848,9 +900,16 @@ class Scritmo(
         if disp.ndim == 0 or disp.size == 1:
             disp = np.full_like(A, float(disp))
 
-        adata_sub = adata[:, self.genes]
-        X = adata_sub.layers[layer] if layer in adata_sub.layers else adata_sub.X
-        s = np.asarray(X.sum(axis=1)).reshape(-1).astype(float)
+        # Size factor s: prefer the one the model was fit with (self.counts) so μ matches a_0_hat
+        # (critical when counts != panel sum, e.g. smFISH area-correction). Fall back to the layer
+        # sum only when self.counts can't be aligned to adata (different n_obs).
+        counts = nmp(self.counts).reshape(-1).astype(float)
+        if counts.shape[0] == adata.n_obs:
+            s = counts
+        else:
+            adata_sub = adata[:, self.genes]
+            X = adata_sub.layers[layer] if layer in adata_sub.layers else adata_sub.X
+            s = np.asarray(X.sum(axis=1)).reshape(-1).astype(float)
 
         if theta is None:
             theta = np.asarray(self.post_mode_c, dtype=float).reshape(-1)
@@ -898,29 +957,99 @@ class Scritmo(
         use_circular_mean: bool = False,
     ):
         """
-        Orchestrates the estimation of phase desynchrony by:
-        1. Creating a results DataFrame from real data.
-        2. Simulating cell populations with no phase variance (technical).
-        3. Computing biological desynchrony by comparing real and simulated dispersion.
+        Estimate biological phase desynchrony, correcting for the technical floor.
+
+        The observed spread of per-cell phases within a sample mixes true
+        biological desynchrony with technical (estimation) noise. This method
+        separates the two by comparing the real spread against a "technical twin"
+        whose only spread is estimation noise, then subtracting in quadrature
+        inside :func:`desync_results`. End to end it:
+
+        1. Builds a per-cell results DataFrame from the real data
+           (:meth:`create_results_df`), optionally filtering cells by posterior
+           phase uncertainty (``post_std_threshold``).
+        2. Estimates the technical floor with one of two methods (``sigma_tech_method``):
+             - "simulation": simulate a perfectly-synchronized population
+               (``kappa=inf``) with this model and re-infer phases, so the recovered
+               spread is purely technical (:meth:`simulate_cell_populations`).
+             - "cramer_rao": attach an analytic per-cell Cramér–Rao σ_tech
+               (:meth:`sigma_tech_rao_per_cell`) and aggregate it per
+               (context, sample) — no simulation twin.
+        3. Computes desynchrony per group by comparing the real dispersion to the
+           technical floor (:func:`desync_results`).
 
         Parameters
         ----------
         adata : AnnData
-            Annotated data matrix.
-        ext_phase : np.ndarray
-            External phase array for the real data.
+            Annotated data matrix; must contain ``self.genes``.
+        ext_phase : np.ndarray, optional
+            External (reference) phase per cell, in radians. If None, the cell
+            posterior estimates are used as the external frame.
         context_col : str, optional
-            Column in adata.obs defining the context (e.g., condition/genotype).
+            Column in ``adata.obs`` defining the context (e.g. condition/genotype).
+            If None, falls back to "context"; allowed to be None only when the model
+            has a single context (it is then auto-assigned).
         sample_col : str, default "sample_name"
-            Column in adata.obs defining the sample identifier.
+            Column in ``adata.obs`` identifying the biological replicate/sample.
         ext_time_col : str, default "ZTmod"
-            Column name for external time. Passed as 'ext_time_label' to simulation.
+            Column for external time; passed as ``ext_time_label`` to the simulation.
         layer : str, default "spliced"
-            The layer to use for processing and simulation.
+            AnnData layer used for real-data processing and simulation.
+        post_estimator : str, default "post_mode"
+            Per-cell posterior point estimator ("post_mode" / "post_mean") used for
+            both the results DataFrame and the dispersion computation.
+        n_cells : int, optional
+            Number of cells to simulate (simulation method). None -> match the data.
+        period : float, default 24.0
+            Circadian period, in hours.
+        device : str, default "cuda"
+            Torch device for the simulation re-inference.
+        n_epochs_training : int, default 0
+            Re-training epochs on the simulated twin (0 = reuse current gene params).
         n_replicates_sim : int, optional
-            Number of replicates to generate during simulation.
+            Number of simulated replicates per group.
+        library_size_vec : array-like, optional
+            Per-cell library sizes for the simulated population (defaults to data).
+        n_sim_runs : int, default 5
+            Number of independent simulation runs to average the technical floor over.
+        posterior_cell_chunk : int, optional
+            Chunk size for posterior inference on simulated cells (caps memory).
+        other_obs_cols : list, default []
+            Extra ``adata.obs`` columns to carry into the results DataFrame.
+        allow_flip : bool, default False
+            Allow a global 180° flip when aligning to the external frame.
+        group_cols : list, optional
+            Grouping for desynchrony aggregation. Defaults to ["context", "sample_name"].
+        disp_function : callable, default cSTD
+            Circular dispersion estimator applied per group (e.g. circular STD).
+        metrics : dict, optional
+            Custom metric callables forwarded to :func:`desync_results`.
         n_replicates_real : int, optional
-            Number of bootstrap replicates for the real data aggregation.
+            Bootstrap replicates for the real-data aggregation.
+        seed_real : int, default 42
+            RNG seed for the real-data bootstrap.
+        seed_sim : int, optional
+            RNG seed for the simulation.
+        sigma_tech_method : {"simulation", "cramer_rao"}, default "simulation"
+            How to estimate the technical floor (see step 2).
+        rao_phase : {"map", "ext_time"}, default "map"
+            For the Cramér–Rao method, the phase at which the analytic σ_tech is
+            evaluated: each cell's MAP phase, or its sample's synchronized phase.
+        post_std_threshold : float, default inf
+            Drop cells whose posterior phase std exceeds this (radians) before
+            computing desynchrony. Default keeps all cells.
+        weight_by_post_std : bool, default False
+            If True, weight the desynchrony aggregation by ``post_std_c``.
+        use_circular_mean : bool, default False
+            Use the circular mean (vs. point estimate) for the simulated population means.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Per-group desynchrony table from :func:`desync_results`, with the
+            technical floor removed (biological desynchrony, plus the intermediate
+            real / technical dispersion columns). Also stores the intermediate
+            real-data frame on ``self.result_df``.
         """
 
         if context_col is None:
