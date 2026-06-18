@@ -458,6 +458,12 @@ def aggregate_technical_rao(
     if group_cols is None:
         group_cols = ["context", "sample_name"]
 
+    # match aggregate_real_results: stringify the group keys so the desync_results merge aligns
+    # (real_agg stringifies; without this, numeric sample ids like smFISH ZT mismatch -> NaN floor).
+    df_real = df_real.copy()
+    for col in group_cols:
+        df_real[col] = df_real[col].astype(str)
+
     final_stats = (
         df_real.groupby(group_cols)[sigma_col]
         .apply(lambda s: technical_cstd_rao(s.values))
