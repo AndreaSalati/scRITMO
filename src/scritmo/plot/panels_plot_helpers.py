@@ -112,5 +112,8 @@ def save_files(
     # optionally be explicit about font:
     matplotlib.rcParams["font.family"] = "DejaVu Sans"
 
+    os.makedirs(path, exist_ok=True)
+    # save both vector formats side by side (SVG for editing, PDF for the paper)
     fig.savefig(path + figure_name + ".svg", format="svg")
+    fig.savefig(path + figure_name + ".pdf", format="pdf", bbox_inches="tight")
     # fig.savefig(path + figure_name + ".png", format="png", dpi=300)
