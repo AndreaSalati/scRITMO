@@ -155,6 +155,8 @@ def infer_phases(
     context_mode="none",
     device="cuda",
     align=True,
+    counts=None,
+    constant_offset=False,
 ):
     """Fit `adata` with the canonical `warmup_and_train` (production soft-prior regime) and
     return ONE result dict. `n_epochs` is the single training switch:
@@ -162,6 +164,22 @@ def infer_phases(
       n_epochs  > 0 -> refit phi_g (soft Von-Mises prior) + amplitudes.
     `kill_amps` defaults to (n_epochs > 0): at n_epochs=0 the template amplitudes are kept
     (otherwise they'd be zeroed and never relearned).
+
+    Library-size offset (`counts`): for these subset-of-genome simulations the AnnData holds
+    ONLY the modelled (e.g. clock) genes, so their realized per-cell sum `X.sum(1)` is
+    *phase-dependent* (the oscillating genes drive the total) -- using it as the NB offset
+    divides the phase signal back out and floors the MAE at ~1.4 h regardless of depth. The
+    data were GENERATED with a constant offset = `seq_depth` for every cell (simulate_data),
+    matching reality where the library size is the genome-wide total (≈phase-independent).
+    Set `constant_offset=True` (or pass an explicit `counts` array) to feed a constant offset =
+    `adata.uns["seq_depth"]` to BOTH the intercept GLM and the model, reproducing the validated
+    `get_simulation_results` path -- REQUIRED for pure phase-recovery sims (MAE / posterior /
+    attractor; e.g. sim_gene_param_error, sim_attractor_depth_v2), else the oracle MAE floors at
+    ~2 h and goes bimodal. Default is `False` (realized library) to preserve behaviour for the
+    sigma_bio decomposition sims (sim_populations_v2_parallel, sigma_tech_rao): there the data and
+    the technical twin (simulate_cell_populations, which uses the realized library) must stay on
+    the SAME offset basis, and flipping only the data side to a constant offset desynchronises the
+    two -- reconcile the twin offset before enabling constant_offset for those.
 
     Posterior mode/mean are gauge-aligned to truth (allow_flip) before returning, so the
     saved phases/AE are flip-correct even when the refit lands in the mirror gauge.
@@ -172,6 +190,12 @@ def infer_phases(
     context = adata.obs["context"].values
     true_phase = adata.obs["true_phase"].values.astype(float)
     n_obs = adata.n_obs
+
+    # constant (phase-independent) library-size offset = the generative seq_depth (see docstring)
+    if counts is None and constant_offset:
+        sd = adata.uns.get("seq_depth", None)
+        if sd is not None:
+            counts = np.full(n_obs, float(sd), dtype=float)
 
     cmodel, losses, _mad = warmup_and_train(
         adata,
@@ -189,6 +213,7 @@ def infer_phases(
         batch_size=min(batch_size, n_obs),
         true_phase=true_phase,
         device=device,
+        counts=counts,
     )
 
     post_mode = np.asarray(cmodel.post_mode_c, dtype=float).reshape(-1)
