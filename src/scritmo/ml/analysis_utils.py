@@ -473,6 +473,144 @@ def aggregate_technical_rao(
     return final_stats
 
 
+def fit_harmonic_floor(x_phase, y_var):
+    """OLS fit of the 12h (2nd-harmonic) technical floor  y(φ) = m + a·cos(2φ) + b·sin(2φ).
+
+    Linear in (m, a, b), so an ordinary least-squares fit on the design matrix
+    [1, cos(2φ), sin(2φ)] denoises the noisy per-gridpoint Monte-Carlo variances into 3
+    parameters and captures the expected 12h structure.
+
+    Parameters
+    ----------
+    x_phase : array-like
+        Grid phases (radians), in the same frame as the phases F will be evaluated at.
+    y_var : array-like
+        σ_tech² at each grid phase (variance, i.e. cSTD²).
+
+    Returns
+    -------
+    (m, a, b) : tuple of float
+        Mesor and 2nd-harmonic cosine/sine coefficients of the variance curve.
+    """
+    x_phase = np.asarray(x_phase, dtype=float)
+    y_var = np.asarray(y_var, dtype=float)
+    D = np.column_stack(
+        [np.ones_like(x_phase), np.cos(2 * x_phase), np.sin(2 * x_phase)]
+    )
+    coeffs, *_ = np.linalg.lstsq(D, y_var, rcond=None)
+    m, a, b = float(coeffs[0]), float(coeffs[1]), float(coeffs[2])
+    return m, a, b
+
+
+def eval_harmonic_floor(theta, m, a, b):
+    """Evaluate the fitted floor F(θ) = m + a·cos(2θ) + b·sin(2θ) (σ_tech², rad²).
+
+    Clipped at 0 so fit noise can't yield a negative variance.
+    """
+    theta = np.asarray(theta, dtype=float)
+    F = m + a * np.cos(2 * theta) + b * np.sin(2 * theta)
+    return np.clip(F, 0.0, None)
+
+
+def aggregate_technical_harmonic(
+    df_grid: pd.DataFrame,
+    df_real: pd.DataFrame,
+    group_cols: list = None,
+    post_estimator: str = "post_mode",
+    n_replicates: int | None = None,
+):
+    """Phase-resolved ("harmonic") technical floor, with the SAME output schema as
+    `aggregate_simulated_results` (context, sample_name, Technical_cSTD[rad], Technical_R) so
+    `desync_results(..., sim_agg=...)` consumes it unchanged (df_sim then unused).
+
+    Pipeline (all averaging in VARIANCE = cSTD², root only at the very end):
+      1. Per context, per (grid_idx, run_id) of the twin grid (`df_grid` from
+         :func:`scritmo.ml.simulations.simulate_technical_grid`): x_k = the injected common
+         phase `grid_phase`, y_k = sr.cSTD(post_mode)² (variance). Fit (m, a, b) via
+         :func:`fit_harmonic_floor`. (The injected φ_k is the right x-axis: generation and
+         re-inference share the model's acrophases, so the inferred frame coincides with the
+         injected frame -- and a uniform grid keeps the OLS design orthogonal. The real cells
+         in step 2 are inferred with the same template, so F is evaluated in the same frame.)
+      2. Evaluate F(θ_c) at each REAL cell's inferred phase (`post_estimator` column) using
+         that cell's context coefficients.
+      3. Per (context, sample_name): Technical_cSTD = sqrt(mean_c F(θ_c)); Technical_R = cstd2R.
+      4. If `n_replicates` is set, broadcast each sample's floor to its `_1.._n` splits to
+         match the renaming `aggregate_real_results` does (else `desync_results`' map -> NaN).
+
+    Returns
+    -------
+    (final_stats, coeffs) : (pandas.DataFrame, dict)
+        `final_stats`: the per-(context, sample_name) technical table.
+        `coeffs`: {context: {"m","a","b","grid_phase","grid_var","peak_hours"}} for diagnostics.
+    """
+    if group_cols is None:
+        group_cols = ["context", "sample_name"]
+
+    # --- 1. Fit the floor per context from the twin grid ---
+    coeffs = {}
+    for context_label, df_ctx in df_grid.groupby("context"):
+        x_list, y_list = [], []
+        for _, df_pt in df_ctx.groupby(["grid_idx", "run_id"]):
+            # x = injected common phase phi_k (uniform grid, same frame as the real cells);
+            # y = circular variance of the inferred phases at that grid point.
+            x_list.append(float(df_pt["grid_phase"].iloc[0]))
+            y_list.append(sr.cSTD(df_pt[post_estimator].values) ** 2)  # variance
+        m, a, b = fit_harmonic_floor(x_list, y_list)
+        # two maxima per cycle at 2θ = atan2(b, a): θ* and θ* + π
+        theta_star = np.arctan2(b, a) / 2.0
+        peak_hours = sorted(
+            float(((p % (2 * np.pi)) * rh)) for p in (theta_star, theta_star + np.pi)
+        )
+        coeffs[str(context_label)] = {
+            "m": m, "a": a, "b": b,
+            "grid_phase": np.asarray(x_list),
+            "grid_var": np.asarray(y_list),
+            "peak_hours": peak_hours,
+        }
+
+    # --- 2. Evaluate the floor at each real cell's inferred phase ---
+    df_real = df_real.copy()
+    for col in group_cols:
+        df_real[col] = df_real[col].astype(str)
+
+    floor_var = np.empty(len(df_real), dtype=float)
+    ctx_vals = df_real["context"].values
+    theta_vals = df_real[post_estimator].values
+    for context_label, c in coeffs.items():
+        mask = ctx_vals == context_label
+        floor_var[mask] = eval_harmonic_floor(
+            theta_vals[mask], c["m"], c["a"], c["b"]
+        )
+    df_real = df_real.assign(_floor_var=floor_var)
+
+    # --- 3. Per-(context, sample) floor: mean variance -> sqrt at the very end ---
+    final_stats = (
+        df_real.groupby(group_cols)["_floor_var"]
+        .mean()
+        .reset_index(name="_floor_var")
+    )
+    final_stats["Technical_cSTD"] = np.sqrt(final_stats["_floor_var"])
+    final_stats = final_stats.drop(columns=["_floor_var"])
+
+    # --- 4. Broadcast to n_replicates splits (matches aggregate_real_results renaming) ---
+    # aggregate_real_results renames each sample to f"{sample}_{rep+1}" via
+    # `(replicate + 1).astype(str)`, where `replicate` comes from assign_replicates (float64),
+    # so the suffix is "1.0", "2.0", ... -- mirror that exact float formatting here, else the
+    # desync_results map misses (-> NaN Bio_cSTD).
+    if n_replicates is not None:
+        sample_col = group_cols[-1]
+        rows = []
+        for i in range(n_replicates):
+            sub = final_stats.copy()
+            suffix = str(float(i + 1))  # "1.0", "2.0", ... (matches float64 replicate ids)
+            sub[sample_col] = sub[sample_col].astype(str) + "_" + suffix
+            rows.append(sub)
+        final_stats = pd.concat(rows, ignore_index=True)
+
+    final_stats["Technical_R"] = cstd2R(final_stats["Technical_cSTD"])
+    return final_stats, coeffs
+
+
 def append_first_timepoint_periodic(df_desync, time_col: str = "ext_time_hours"):
     # (This function is unchanged)
     # Find the minimum ext_time_hours (first timepoint)

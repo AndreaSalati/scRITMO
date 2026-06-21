@@ -24,7 +24,10 @@ from scritmo import (
     mean_AE,
 )
 from scritmo import median_dispersion, cSTD
-from .simulations.simulate_populations import simulate_cell_populations
+from .simulations.simulate_populations import (
+    simulate_cell_populations,
+    simulate_technical_grid,
+)
 from .ensemble import EnsembleMixin
 from .unspliced.unspliced_deg import UnsplicedMixin
 from .unspliced.fisher import FisherUncertaintyMixin
@@ -33,6 +36,7 @@ from .analysis_utils import (
     desync_results,
     desync_means,
     aggregate_technical_rao,
+    aggregate_technical_harmonic,
 )
 from .genome_fit import GenomeFitMixin
 from .desync_mixin import DesynchronyMixin
@@ -833,6 +837,36 @@ class Scritmo(
             posterior_cell_chunk=posterior_cell_chunk,
         )
 
+    def simulate_technical_grid(
+        self,
+        adata,
+        context_col: str | None = None,
+        layer_to_use="spliced",
+        n_grid: int = 12,
+        n_cells_per_gridpoint: int = 1000,
+        period=24,
+        device="cuda",
+        n_sim_runs: int = 1,
+        library_size_vec=None,
+        seed_sim: int | None = None,
+        posterior_cell_chunk=None,
+    ):
+        """Wrapper around the simulate_technical_grid function (harmonic σ_tech floor)."""
+        return simulate_technical_grid(
+            cmodel=self,
+            adata=adata,
+            context_col=context_col,
+            layer_to_use=layer_to_use,
+            n_grid=n_grid,
+            n_cells_per_gridpoint=n_cells_per_gridpoint,
+            period=period,
+            device=device,
+            n_sim_runs=n_sim_runs,
+            library_size_vec=library_size_vec,
+            seed_sim=seed_sim,
+            posterior_cell_chunk=posterior_cell_chunk,
+        )
+
     def create_results_df(
         self,
         adata: anndata.AnnData,
@@ -950,6 +984,10 @@ class Scritmo(
         # --- Technical floor method ---
         sigma_tech_method: str = "simulation",
         rao_phase: str = "map",
+        # --- Harmonic floor arguments ---
+        n_grid: int = 12,
+        n_cells_per_gridpoint: int = 1000,
+        return_harmonic_diagnostics: bool = False,
         # --- Cell filtering / weighting ---
         post_std_threshold: float = np.inf,
         weight_by_post_std: bool = False,
@@ -968,13 +1006,19 @@ class Scritmo(
         1. Builds a per-cell results DataFrame from the real data
            (:meth:`create_results_df`), optionally filtering cells by posterior
            phase uncertainty (``post_std_threshold``).
-        2. Estimates the technical floor with one of two methods (``sigma_tech_method``):
+        2. Estimates the technical floor with one of three methods (``sigma_tech_method``):
              - "simulation": simulate a perfectly-synchronized population
                (``kappa=inf``) with this model and re-infer phases, so the recovered
                spread is purely technical (:meth:`simulate_cell_populations`).
              - "cramer_rao": attach an analytic per-cell Cramér–Rao σ_tech
                (:meth:`sigma_tech_rao_per_cell`) and aggregate it per
                (context, sample) — no simulation twin.
+             - "harmonic": run the synchronized twin across a GRID of common phases
+               (:meth:`simulate_technical_grid`), fit the 12h structure of σ_tech²(φ)
+               with a 2-harmonic model, then evaluate that fitted floor at each real
+               cell's inferred phase and average within each replicate. Corrects the
+               single-φ "simulation" floor for its known phase dependence (large near
+               the Bmal1 trough, small at high expression).
         3. Computes desynchrony per group by comparing the real dispersion to the
            technical floor (:func:`desync_results`).
 
@@ -1030,11 +1074,19 @@ class Scritmo(
             RNG seed for the real-data bootstrap.
         seed_sim : int, optional
             RNG seed for the simulation.
-        sigma_tech_method : {"simulation", "cramer_rao"}, default "simulation"
+        sigma_tech_method : {"simulation", "cramer_rao", "harmonic"}, default "simulation"
             How to estimate the technical floor (see step 2).
         rao_phase : {"map", "ext_time"}, default "map"
             For the Cramér–Rao method, the phase at which the analytic σ_tech is
             evaluated: each cell's MAP phase, or its sample's synchronized phase.
+        n_grid : int, default 12
+            (harmonic method) Number of common phases on the twin grid, evenly spaced
+            over [0, 2π).
+        n_cells_per_gridpoint : int, default 1000
+            (harmonic method) Twin cells simulated per (grid point, run).
+        return_harmonic_diagnostics : bool, default False
+            (harmonic method) If True, store the fitted coefficients, raw grid points and
+            implied peak locations on ``self.harmonic_floor_diag`` for plotting/checking.
         post_std_threshold : float, default inf
             Drop cells whose posterior phase std exceeds this (radians) before
             computing desynchrony. Default keeps all cells.
@@ -1122,6 +1174,40 @@ class Scritmo(
                 else ["context", "sample_name"],
                 sigma_col="sigma_tech_rao",
             )
+            df_sim = None
+        elif sigma_tech_method == "harmonic":
+            # 2a''. Phase-resolved floor: twin grid of common phases -> fit sigma_tech^2(phi),
+            # evaluate at each real cell's inferred phase, average within replicate.
+            df_grid = self.simulate_technical_grid(
+                adata=adata,
+                context_col=context_col,
+                layer_to_use=layer,
+                n_grid=n_grid,
+                n_cells_per_gridpoint=n_cells_per_gridpoint,
+                period=period,
+                device=device,
+                n_sim_runs=n_sim_runs,
+                library_size_vec=library_size_vec,
+                seed_sim=seed_sim,
+                posterior_cell_chunk=posterior_cell_chunk,
+            )
+            tech_agg, harmonic_coeffs = aggregate_technical_harmonic(
+                df_grid,
+                df_real,
+                group_cols=group_cols if group_cols is not None
+                else ["context", "sample_name"],
+                post_estimator=post_estimator,
+                n_replicates=n_replicates_real,
+            )
+            # sanity output: the fitted floor should show two maxima per cycle (12h structure)
+            for ctx, c in harmonic_coeffs.items():
+                print(
+                    f"  harmonic floor [{ctx}]: sigma_tech^2(phi) = "
+                    f"{c['m']:.4f} + {c['a']:.4f}*cos(2phi) + {c['b']:.4f}*sin(2phi)  "
+                    f"-> peaks at {c['peak_hours'][0]:.1f}h / {c['peak_hours'][1]:.1f}h"
+                )
+            if return_harmonic_diagnostics:
+                self.harmonic_floor_diag = harmonic_coeffs
             df_sim = None
         else:
             # 2a. Simulate the technical twin (point estimates only)
