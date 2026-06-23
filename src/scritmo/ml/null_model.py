@@ -298,6 +298,85 @@ class NullModelMixin:
                 out["post_mode_c"] = pm
         return out
 
+    def per_gene_residuals(
+        self,
+        adata,
+        layer=None,
+        counts=None,
+        phase_estimator="mode",
+        mask=None,
+        pseudocount=1.0,
+    ):
+        r"""Per-gene squared log-residuals at each cell's MAP phase (Reviewer 1, idea ii).
+
+        For every cell c and gene g, the residual between the observed counts and the
+        fitted template prediction evaluated at the cell's MAP phase $\hat\theta_c$:
+
+            r_{cg} = (log(x_{cg} + pc) - log(\hat\mu_{cg}(\hat\theta_c) + pc))^2 ,
+
+        with $\hat\mu_{cg} = \exp(a_{0,g} + A_g\cos(\hat\theta_c - \phi_g))\,s_c$ the fitted
+        NB mean (``pc`` a pseudocount so the log is finite at zero counts). The *pattern*
+        of these residuals across genes distinguishes the two failure modes the reviewer
+        names: a few genes with systematically large $r_{cg}$ flag template ($\phi_g$)
+        misspecification, whereas residuals large and uniform across all genes flag a
+        diffuse, low-quality (e.g. low-depth) fit. Reported alongside σ_u and Δ_c.
+
+        Companion to :meth:`rhythmic_evidence_per_cell` (shares the MAP-phase μ); must be
+        called after training + ``get_inferred_phases``. Pure forward evaluation.
+
+        Args:
+            adata, layer, counts, phase_estimator, mask : as in
+                :meth:`rhythmic_evidence_per_cell`.
+            pseudocount : added to counts and μ before the log (default 1.0).
+
+        Returns:
+            pd.DataFrame of shape (n_obs, n_genes), indexed by ``adata.obs_names`` with
+            ``self.genes`` as columns, holding r_{cg}. Aggregate over cells (per column)
+            for the per-gene residual pattern, or over genes (per row) for a per-cell
+            diffuse-quality score.
+        """
+        from .utils import nmp
+
+        genes = self.genes
+        if layer is None:
+            Y = adata[:, genes].X
+        else:
+            Y = adata[:, genes].layers[layer]
+        try:
+            Y = Y.toarray()
+        except AttributeError:
+            Y = np.asarray(Y)
+        Y = Y.astype(float)  # (Nc, Ng)
+        Nc, Ng = Y.shape
+
+        if counts is None:
+            raw = adata.X if layer is None else adata.layers[layer]
+            counts = np.asarray(raw.sum(1)).squeeze().astype(float)
+        counts = np.asarray(counts).squeeze().astype(float)
+
+        params_inf = self.get_parameter_dataframe()
+        a0_f = params_inf["a_0"].values
+        amp_f = params_inf["amp"].values
+        phase_f = params_inf["phase"].values
+
+        phases_c = self.post_mode_c if phase_estimator == "mode" else self.post_mean_c
+        if mask is not None:
+            phases_c = phases_c[mask]
+        phases_c = np.asarray(phases_c, dtype=float).reshape(-1)
+        if phases_c.shape[0] != Nc:
+            raise ValueError(
+                f"phase vector length {phases_c.shape[0]} != n_cells {Nc}; "
+                "pass `mask` if adata/counts are a subset of the training set."
+            )
+
+        log_mu = a0_f[None, :] + amp_f[None, :] * np.cos(
+            phases_c[:, None] - phase_f[None, :]
+        )
+        mu_map = np.exp(log_mu) * counts[:, None]  # (Nc, Ng)
+        r_cg = (np.log(Y + pseudocount) - np.log(mu_map + pseudocount)) ** 2
+
+        return pd.DataFrame(r_cg, index=np.asarray(adata.obs_names), columns=list(genes))
+
 
 # ------------------------------------------------------------------ helpers
 
