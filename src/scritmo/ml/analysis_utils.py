@@ -87,11 +87,18 @@ def desync_results(
     ext_time_col: str = "ext_time",
     # weighting
     weight_col: str | None = None,
+    # precomputed technical floor (Cramér–Rao branch): if given, df_sim is ignored and this
+    # per-(context, sample) table supplies Technical_cSTD/Technical_R directly.
+    sim_agg: pd.DataFrame | None = None,
 ):
     """
     First it aggregates data by calling aggregate_real_results and aggregate_simulated_results,
     then fuses the 2 in one dataframe. Finally it computes the
     biological desynchrony with the quadrature difference.
+
+    `sim_agg` lets a caller bypass the simulation twin: pass a precomputed technical table (same
+    schema as `aggregate_simulated_results`: context, sample_name, Technical_cSTD[rad], Technical_R)
+    and `df_sim` is not used. This is the analytic Cramér–Rao path (`aggregate_technical_rao`).
 
     TO BE FIXED: Currently the group cols can only be two: context and sample_name.
     columns with another names will create problems
@@ -115,14 +122,15 @@ def desync_results(
         weight_col=weight_col,
     )
 
-    sim_agg = aggregate_simulated_results(
-        df_sim,
-        # group_cols=group_cols,
-        disp_function=disp_function,
-        post_estimator=post_estimator,
-        ext_time_col=ext_time_col,
-        weight_col="post_std" if weight_col is not None else None,
-    )
+    if sim_agg is None:
+        sim_agg = aggregate_simulated_results(
+            df_sim,
+            # group_cols=group_cols,
+            disp_function=disp_function,
+            post_estimator=post_estimator,
+            ext_time_col=ext_time_col,
+            weight_col="post_std" if weight_col is not None else None,
+        )
 
     # 2. Initialize Mixed DataFrame
     df_mixed = real_agg.copy()
@@ -433,251 +441,174 @@ def aggregate_simulated_results(
     return final_stats
 
 
-def cSTD_posterior_mixture(posterior_xc: np.ndarray) -> float:
-    """
-    Compute the circular standard deviation of the mixture of posterior distributions.
-
-    Parameters
-    ----------
-    posterior_xc : np.ndarray, shape (Nx, Nc)
-        Normalized posterior distributions. Each column is a probability
-        distribution over the phase grid [0, 2π) for one cell.
-
-    Returns
-    -------
-    float
-        Circular standard deviation of the population mixture (in radians).
-    """
-    # Average over cells → mixture distribution, shape (Nx,)
-    mixture = posterior_xc.mean(axis=1)
-    mixture = mixture / mixture.sum()
-
-    Nx = len(mixture)
-    # Grid endpoint=False, consistent with how posteriors are computed
-    phis = np.linspace(0, 2 * np.pi, Nx, endpoint=False)
-
-    R = np.abs(np.sum(mixture * np.exp(1j * phis)))
-    cstd = float(np.sqrt(-2 * np.log(R + 1e-10)))
-    return cstd
-
-
-def aggregate_real_results_posterior(
-    posterior_xc: np.ndarray,
+def aggregate_technical_rao(
     df_real: pd.DataFrame,
     group_cols: list = None,
-    n_replicates: int | None = None,
-    seed: int = 42,
-) -> pd.DataFrame:
-    """
-    Aggregate real data desynchrony using full posterior distributions.
+    sigma_col: str = "sigma_tech_rao",
+):
+    """Aggregate the per-cell analytic Cramér–Rao σ_tech into a per-(context, sample) technical
+    floor, with the SAME output schema as `aggregate_simulated_results` (context, sample_name,
+    Technical_cSTD[rad], Technical_R) so `desync_results(..., sim_agg=...)` consumes it unchanged.
 
-    Parameters
-    ----------
-    posterior_xc : np.ndarray, shape (Nx, Nc)
-        Full posteriors from get_inferred_phases; columns aligned with df_real rows.
-    df_real : pd.DataFrame
-        Results DataFrame from create_results_dataframe.
-    group_cols : list
-        Columns to group by (default: ["context", "sample_name"]).
-    n_replicates : int, optional
-        If set, bootstrap into this many sub-samples per group.
-    seed : int
-        Random seed for replicate assignment.
-
-    Returns
-    -------
-    pd.DataFrame
-        Aggregated DataFrame with Data_cSTD (radians) and Data_R per group.
+    Sample-level Technical_cSTD is the circular-mixture spread of the per-cell wrapped-normal MAP
+    estimators (`cramer_rao.technical_cstd_rao`): R̄ = mean_i exp(−σ_i²/2), cSTD = √(−2 ln R̄).
     """
+    from .cramer_rao import technical_cstd_rao
+
     if group_cols is None:
         group_cols = ["context", "sample_name"]
 
-    df_to_agg = df_real.copy().reset_index(drop=True)
-    df_to_agg["_pos"] = np.arange(len(df_to_agg))
-
+    # match aggregate_real_results: stringify the group keys so the desync_results merge aligns
+    # (real_agg stringifies; without this, numeric sample ids like smFISH ZT mismatch -> NaN floor).
+    df_real = df_real.copy()
     for col in group_cols:
-        df_to_agg[col] = df_to_agg[col].astype(str)
+        df_real[col] = df_real[col].astype(str)
 
-    if n_replicates is not None:
-        df_to_agg["replicate"] = assign_replicates(
-            df_to_agg, group_cols, n_replicates, seed
-        )
-        group_cols_with_rep = group_cols + ["replicate"]
-    else:
-        group_cols_with_rep = group_cols
-
-    results = []
-    for group_key, group_df in df_to_agg.groupby(group_cols_with_rep):
-        positions = group_df["_pos"].values
-        group_posterior = posterior_xc[:, positions]
-        data_cstd = cSTD_posterior_mixture(group_posterior)
-
-        if not isinstance(group_key, tuple):
-            group_key = (group_key,)
-        row = dict(zip(group_cols_with_rep, group_key))
-        row["Data_cSTD"] = data_cstd
-        row["Data_R"] = float(cstd2R(data_cstd))
-        row["group_size"] = len(positions)
-        if "ext_time_hours" in group_df.columns:
-            row["ext_time_hours"] = group_df["ext_time_hours"].iloc[0]
-        if "post_std_c" in group_df.columns:
-            row["post_std_c"] = float(group_df["post_std_c"].median())
-        results.append(row)
-
-    agg_df = pd.DataFrame(results)
-
-    if n_replicates is not None:
-        sample_col = group_cols[-1]
-        agg_df[sample_col] = (
-            agg_df[sample_col].astype(str) + "_" + (agg_df["replicate"] + 1).astype(str)
-        )
-        agg_df = agg_df.drop(columns=["replicate"])
-
-    return agg_df
-
-
-def aggregate_simulated_results_posterior(
-    posteriors_dict: dict,
-    df_sim: pd.DataFrame,
-) -> pd.DataFrame:
-    """
-    Aggregate simulated data using full posterior distributions.
-
-    Parameters
-    ----------
-    posteriors_dict : dict
-        Dict with keys 'posterior_xc' (Nx, N_total), 'sample_name' (list, N_total),
-        'context' (list, N_total). Columns of posterior_xc align with df_sim rows.
-    df_sim : pd.DataFrame
-        Simulation results DataFrame (from simulate_cell_populations).
-
-    Returns
-    -------
-    pd.DataFrame
-        Aggregated DataFrame with Technical_cSTD and Technical_R per (context, sample_name).
-    """
-    posterior_xc = posteriors_dict["posterior_xc"]  # (Nx, N_total)
-
-    df_work = df_sim.copy().reset_index(drop=True)
-    df_work["_pos"] = np.arange(len(df_work))
-    df_work["base_sample"] = df_work["sample_name"].str.replace(
-        r"_run\d+$", "", regex=True
-    )
-    df_work["run_id"] = df_work["sample_name"].str.extract(r"(run\d+)$")
-
-    # First aggregation: compute mixture cSTD per (context, base_sample, run_id)
-    run_level = []
-    for (ctx, base_samp, run_id), group_df in df_work.groupby(
-        ["context", "base_sample", "run_id"]
-    ):
-        positions = group_df["_pos"].values
-        group_posterior = posterior_xc[:, positions]
-        cstd_run = cSTD_posterior_mixture(group_posterior)
-        run_level.append(
-            {
-                "context": ctx,
-                "base_sample": base_samp,
-                "run_id": run_id,
-                "cSTD_run": cstd_run,
-                "Var_run": cstd_run**2,
-            }
-        )
-
-    run_level_df = pd.DataFrame(run_level)
-
-    # Second aggregation: average variances across runs
     final_stats = (
-        run_level_df.groupby(["context", "base_sample"])
-        .agg({"Var_run": "mean", "cSTD_run": "mean"})
-        .reset_index()
+        df_real.groupby(group_cols)[sigma_col]
+        .apply(lambda s: technical_cstd_rao(s.values))
+        .reset_index(name="Technical_cSTD")
     )
-
-    final_stats["Technical_cSTD"] = np.sqrt(final_stats["Var_run"])
     final_stats["Technical_R"] = cstd2R(final_stats["Technical_cSTD"])
-    final_stats = final_stats.rename(columns={"base_sample": "sample_name"})
-
     return final_stats
 
 
-def desync_results_posterior(
-    df_real: pd.DataFrame,
-    real_posterior_xc: np.ndarray,
-    df_sim: pd.DataFrame,
-    sim_posteriors_dict: dict,
-    group_cols: list = None,
-    n_replicates: int | None = None,
-    seed: int = 42,
-) -> pd.DataFrame:
-    """
-    Compute desynchrony using full posterior distributions (posterior_mixture mode).
+def fit_harmonic_floor(x_phase, y_var):
+    """OLS fit of the 12h (2nd-harmonic) technical floor  y(φ) = m + a·cos(2φ) + b·sin(2φ).
 
-    Replaces desync_results when mode='posterior_mixture'. Uses the mixture of
-    per-cell posteriors to compute circular std rather than point estimates.
+    Linear in (m, a, b), so an ordinary least-squares fit on the design matrix
+    [1, cos(2φ), sin(2φ)] denoises the noisy per-gridpoint Monte-Carlo variances into 3
+    parameters and captures the expected 12h structure.
 
     Parameters
     ----------
-    df_real : pd.DataFrame
-        Real data results from create_results_dataframe (needed for group metadata).
-    real_posterior_xc : np.ndarray, shape (Nx, Nc)
-        Full posteriors from the real data inference pass.
-    df_sim : pd.DataFrame
-        Simulated data results from simulate_cell_populations.
-    sim_posteriors_dict : dict
-        Posterior dict returned by simulate_cell_populations(return_posteriors=True).
-    group_cols : list
-        Grouping columns (default: ["context", "sample_name"]).
-    n_replicates : int, optional
-        Bootstrap replicates for real data aggregation.
-    seed : int
-        Random seed.
+    x_phase : array-like
+        Grid phases (radians), in the same frame as the phases F will be evaluated at.
+    y_var : array-like
+        σ_tech² at each grid phase (variance, i.e. cSTD²).
 
     Returns
     -------
-    pd.DataFrame
-        DataFrame with Data_cSTD, Technical_cSTD, Bio_cSTD (all in hours).
+    (m, a, b) : tuple of float
+        Mesor and 2nd-harmonic cosine/sine coefficients of the variance curve.
+    """
+    x_phase = np.asarray(x_phase, dtype=float)
+    y_var = np.asarray(y_var, dtype=float)
+    D = np.column_stack(
+        [np.ones_like(x_phase), np.cos(2 * x_phase), np.sin(2 * x_phase)]
+    )
+    coeffs, *_ = np.linalg.lstsq(D, y_var, rcond=None)
+    m, a, b = float(coeffs[0]), float(coeffs[1]), float(coeffs[2])
+    return m, a, b
+
+
+def eval_harmonic_floor(theta, m, a, b):
+    """Evaluate the fitted floor F(θ) = m + a·cos(2θ) + b·sin(2θ) (σ_tech², rad²).
+
+    Clipped at 0 so fit noise can't yield a negative variance.
+    """
+    theta = np.asarray(theta, dtype=float)
+    F = m + a * np.cos(2 * theta) + b * np.sin(2 * theta)
+    return np.clip(F, 0.0, None)
+
+
+def aggregate_technical_harmonic(
+    df_grid: pd.DataFrame,
+    df_real: pd.DataFrame,
+    group_cols: list = None,
+    post_estimator: str = "post_mode",
+    n_replicates: int | None = None,
+):
+    """Phase-resolved ("harmonic") technical floor, with the SAME output schema as
+    `aggregate_simulated_results` (context, sample_name, Technical_cSTD[rad], Technical_R) so
+    `desync_results(..., sim_agg=...)` consumes it unchanged (df_sim then unused).
+
+    Pipeline (all averaging in VARIANCE = cSTD², root only at the very end):
+      1. Per context, per (grid_idx, run_id) of the twin grid (`df_grid` from
+         :func:`scritmo.ml.simulations.simulate_technical_grid`): x_k = the injected common
+         phase `grid_phase`, y_k = sr.cSTD(post_mode)² (variance). Fit (m, a, b) via
+         :func:`fit_harmonic_floor`. (The injected φ_k is the right x-axis: generation and
+         re-inference share the model's acrophases, so the inferred frame coincides with the
+         injected frame -- and a uniform grid keeps the OLS design orthogonal. The real cells
+         in step 2 are inferred with the same template, so F is evaluated in the same frame.)
+      2. Evaluate F(θ_c) at each REAL cell's inferred phase (`post_estimator` column) using
+         that cell's context coefficients.
+      3. Per (context, sample_name): Technical_cSTD = sqrt(mean_c F(θ_c)); Technical_R = cstd2R.
+      4. If `n_replicates` is set, broadcast each sample's floor to its `_1.._n` splits to
+         match the renaming `aggregate_real_results` does (else `desync_results`' map -> NaN).
+
+    Returns
+    -------
+    (final_stats, coeffs) : (pandas.DataFrame, dict)
+        `final_stats`: the per-(context, sample_name) technical table.
+        `coeffs`: {context: {"m","a","b","grid_phase","grid_var","peak_hours"}} for diagnostics.
     """
     if group_cols is None:
         group_cols = ["context", "sample_name"]
 
-    real_agg = aggregate_real_results_posterior(
-        real_posterior_xc,
-        df_real,
-        group_cols=group_cols,
-        n_replicates=n_replicates,
-        seed=seed,
+    # --- 1. Fit the floor per context from the twin grid ---
+    coeffs = {}
+    for context_label, df_ctx in df_grid.groupby("context"):
+        x_list, y_list = [], []
+        for _, df_pt in df_ctx.groupby(["grid_idx", "run_id"]):
+            # x = injected common phase phi_k (uniform grid, same frame as the real cells);
+            # y = circular variance of the inferred phases at that grid point.
+            x_list.append(float(df_pt["grid_phase"].iloc[0]))
+            y_list.append(sr.cSTD(df_pt[post_estimator].values) ** 2)  # variance
+        m, a, b = fit_harmonic_floor(x_list, y_list)
+        # two maxima per cycle at 2θ = atan2(b, a): θ* and θ* + π
+        theta_star = np.arctan2(b, a) / 2.0
+        peak_hours = sorted(
+            float(((p % (2 * np.pi)) * rh)) for p in (theta_star, theta_star + np.pi)
+        )
+        coeffs[str(context_label)] = {
+            "m": m, "a": a, "b": b,
+            "grid_phase": np.asarray(x_list),
+            "grid_var": np.asarray(y_list),
+            "peak_hours": peak_hours,
+        }
+
+    # --- 2. Evaluate the floor at each real cell's inferred phase ---
+    df_real = df_real.copy()
+    for col in group_cols:
+        df_real[col] = df_real[col].astype(str)
+
+    floor_var = np.empty(len(df_real), dtype=float)
+    ctx_vals = df_real["context"].values
+    theta_vals = df_real[post_estimator].values
+    for context_label, c in coeffs.items():
+        mask = ctx_vals == context_label
+        floor_var[mask] = eval_harmonic_floor(
+            theta_vals[mask], c["m"], c["a"], c["b"]
+        )
+    df_real = df_real.assign(_floor_var=floor_var)
+
+    # --- 3. Per-(context, sample) floor: mean variance -> sqrt at the very end ---
+    final_stats = (
+        df_real.groupby(group_cols)["_floor_var"]
+        .mean()
+        .reset_index(name="_floor_var")
     )
+    final_stats["Technical_cSTD"] = np.sqrt(final_stats["_floor_var"])
+    final_stats = final_stats.drop(columns=["_floor_var"])
 
-    sim_agg = aggregate_simulated_results_posterior(sim_posteriors_dict, df_sim)
+    # --- 4. Broadcast to n_replicates splits (matches aggregate_real_results renaming) ---
+    # aggregate_real_results renames each sample to f"{sample}_{rep+1}" via
+    # `(replicate + 1).astype(str)`, where `replicate` comes from assign_replicates (float64),
+    # so the suffix is "1.0", "2.0", ... -- mirror that exact float formatting here, else the
+    # desync_results map misses (-> NaN Bio_cSTD).
+    if n_replicates is not None:
+        sample_col = group_cols[-1]
+        rows = []
+        for i in range(n_replicates):
+            sub = final_stats.copy()
+            suffix = str(float(i + 1))  # "1.0", "2.0", ... (matches float64 replicate ids)
+            sub[sample_col] = sub[sample_col].astype(str) + "_" + suffix
+            rows.append(sub)
+        final_stats = pd.concat(rows, ignore_index=True)
 
-    df_mixed = real_agg.copy()
-
-    try:
-        sim_lookup = sim_agg.set_index(group_cols)
-    except KeyError:
-        print(f"Error: sim_agg missing one of: {group_cols}")
-        return df_mixed
-
-    try:
-        map_index = pd.MultiIndex.from_frame(df_mixed[group_cols])
-    except KeyError:
-        print(f"Error: df_mixed missing one of: {group_cols}")
-        return df_mixed
-
-    if "Technical_cSTD" in sim_lookup.columns:
-        df_mixed["Technical_cSTD"] = map_index.map(sim_lookup["Technical_cSTD"])
-    if "Technical_R" in sim_lookup.columns:
-        df_mixed["Technical_R"] = map_index.map(sim_lookup["Technical_R"])
-
-    # Convert radians → hours
-    df_mixed["Technical_cSTD"] = df_mixed["Technical_cSTD"] * rh
-    df_mixed["Data_cSTD"] = df_mixed["Data_cSTD"] * rh
-
-    df_mixed["Bio_cSTD"] = np.sqrt(
-        np.maximum(df_mixed["Data_cSTD"] ** 2 - df_mixed["Technical_cSTD"] ** 2, 0)
-    )
-    df_mixed["Bio_R"] = cstd2R(df_mixed["Bio_cSTD"] / rh)
-
-    return df_mixed
+    final_stats["Technical_R"] = cstd2R(final_stats["Technical_cSTD"])
+    return final_stats, coeffs
 
 
 def append_first_timepoint_periodic(df_desync, time_col: str = "ext_time_hours"):

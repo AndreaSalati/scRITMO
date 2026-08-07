@@ -42,7 +42,6 @@ def _infer_phases_for_context(
     s_ext_time: list,
     s_true_time: list,
     n_epochs_training: int = 0,
-    return_posteriors: bool = False,
     posterior_cell_chunk: int | None = None,
 ):
     """
@@ -94,7 +93,6 @@ def _infer_phases_for_context(
     post_mean_c = model_y.post_mean_c
     post_std_c = model_y.post_std_c
     post_mode_c = model_y.post_mode_c
-    posterior_xc = model_y.posterior_xc if return_posteriors else None
 
     # Build the list of dictionaries
     # myabe call the utils function here create_results_dataframe
@@ -116,8 +114,6 @@ def _infer_phases_for_context(
     del model_y, data_c
     torch.cuda.empty_cache()
 
-    if return_posteriors:
-        return results, posterior_xc
     return results
 
 
@@ -139,7 +135,6 @@ def simulate_cell_populations(
     seed_sim: int | None = None,
     library_size_vec: np.ndarray | None = None,
     n_sim_runs: int = 5,  # NEW: Number of "Twin" simulations to run
-    return_posteriors: bool = False,
     use_circular_mean: bool = False,
     posterior_cell_chunk: int | None = None,
 ):
@@ -184,9 +179,6 @@ def simulate_cell_populations(
         group_by_cols = base_group_by_cols
 
     all_results_list = []
-    all_posteriors_list = [] if return_posteriors else None  # (Nx, N_cells) per context
-    all_posterior_sample_names = [] if return_posteriors else None
-    all_posterior_contexts = [] if return_posteriors else None
     unique_contexts = obs[context_col].unique()
 
     # --- 2. NESTED LOOP: Context (Outer) -> Samples (Inner) ---
@@ -280,7 +272,7 @@ def simulate_cell_populations(
 
         # --- 3. Batch Inference for the whole Context ---
         if ctx_gen_data:
-            infer_result = _infer_phases_for_context(
+            context_results = _infer_phases_for_context(
                 generated_data=np.concatenate(ctx_gen_data, axis=0),
                 library_sizes=np.concatenate(ctx_lib_sizes, axis=0),
                 fourier_coefficients=fourier_coefficients_y[context_label],
@@ -291,41 +283,168 @@ def simulate_cell_populations(
                 s_ext_time=ctx_ext_times,
                 s_true_time=ctx_true_times,
                 n_epochs_training=n_epochs_training,
-                return_posteriors=return_posteriors,
                 posterior_cell_chunk=posterior_cell_chunk,
             )
-            if return_posteriors:
-                context_results, ctx_posterior_xc = infer_result
-                all_posteriors_list.append(ctx_posterior_xc)
-                all_posterior_sample_names.extend(ctx_sample_names)
-                all_posterior_contexts.extend([context_label] * len(ctx_sample_names))
-            else:
-                context_results = infer_result
             all_results_list.extend(context_results)
 
     # --- 4. Finalize ---
     if not all_results_list:
-        empty_df = pd.DataFrame(
+        return pd.DataFrame(
             columns=["post_mean", "post_mode", "post_std", "context", "sample_name"]
         )
-        if return_posteriors:
-            return empty_df, {
-                "posterior_xc": np.empty((0, 0)),
-                "sample_name": [],
-                "context": [],
-            }
-        return empty_df
 
-    df = pd.DataFrame(all_results_list)
+    return pd.DataFrame(all_results_list)
 
-    if return_posteriors:
-        posteriors_dict = {
-            "posterior_xc": np.concatenate(
-                all_posteriors_list, axis=1
-            ),  # (Nx, N_total)
-            "sample_name": all_posterior_sample_names,
-            "context": all_posterior_contexts,
-        }
-        return df, posteriors_dict
 
-    return df
+def simulate_technical_grid(
+    cmodel,
+    adata,
+    context_col: str | None = None,
+    layer_to_use="spliced",
+    n_grid: int = 12,
+    n_cells_per_gridpoint: int = 1000,
+    period=24,
+    device="cuda",
+    n_sim_runs: int = 1,
+    library_size_vec: np.ndarray | None = None,
+    seed_sim: int | None = None,
+    posterior_cell_chunk: int | None = None,
+):
+    """Twin-population grid for the phase-resolved ("harmonic") technical floor.
+
+    σ_tech is itself phase-dependent (large near the Bmal1 trough, small at high
+    expression). This builds a perfectly-synchronized ("twin") population at each of
+    ``n_grid`` common phases evenly spaced over [0, 2π), re-infers phases, and returns the
+    inferred phases per grid point so the caller can fit σ_tech²(φ) (see
+    :func:`scritmo.ml.analysis_utils.aggregate_technical_harmonic`).
+
+    Every twin population is common-phase (σ_bio = 0) -- that is what makes its inferred
+    spread a pure noise floor. Library sizes are POOLED across all cells of ``adata`` (all
+    biological replicates of the celltype) and resampled at each grid point, so the floor's
+    phase shape reflects the dataset's overall depth distribution. Reuses
+    :func:`simulate_data_no_context` for generation and :func:`_infer_phases_for_context`
+    for inference -- the same primitives as :func:`simulate_cell_populations`.
+
+    Parameters mirror :func:`simulate_cell_populations` where shared. ``n_grid`` grid points,
+    ``n_cells_per_gridpoint`` twin cells per (grid point, run), ``n_sim_runs`` independent
+    runs per grid point (more runs -> more fit points for the 2-harmonic OLS).
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per simulated twin cell, columns ``context``, ``grid_idx``, ``grid_phase``
+        (injected common phase φ_k, rad), ``run_id``, ``post_mode``, ``post_mean``,
+        ``post_std``, ``sample_name`` (``f"grid{k}_run{r}"``).
+    """
+    fourier_coefficients_y = cmodel.get_parameter_dataframe_context(np.arange(cmodel.Ng))
+    obs = adata.obs.copy()
+
+    if context_col is None:
+        context_col = "context"
+        context_val = list(fourier_coefficients_y.keys())[0]
+        obs[context_col] = context_val
+
+    obs[context_col] = obs[context_col].astype(str)
+
+    # Library-size pool for the twins. The size factor MUST be the genome-wide library (what
+    # a_0 was calibrated against), NOT the modelled-gene (e.g. clock-gene) sum -- the latter is
+    # tiny (~3-30 counts) and phase-dependent, so generating twins with it produces ~0 counts ->
+    # near-uniform posteriors -> an artificially small/biased technical floor. (This is a
+    # recurrent foot-gun; see CLAUDE.md.) Preference order:
+    #   1. explicit library_size_vec (callers pass the constant generative seq_depth for the
+    #      subset-of-genome sims, exactly like simulate_cell_populations);
+    #   2. cmodel.counts -- the size factor the model was actually fit with, genome-wide and
+    #      self-consistent with a_0 (same source the Cramér-Rao twin uses), when it aligns 1:1
+    #      with adata;
+    #   3. fallback: adata.layers[layer].sum(1) -- correct ONLY if adata holds the full genome.
+    if library_size_vec is not None:
+        obs["library_size"] = library_size_vec
+    else:
+        model_counts = nmp(cmodel.counts).reshape(-1).astype(float)
+        if model_counts.shape[0] == adata.n_obs:
+            obs["library_size"] = model_counts
+        else:
+            obs["library_size"] = csr_matrix(adata.layers[layer_to_use]).sum(axis=1).A1
+
+    if seed_sim is not None:
+        torch.manual_seed(seed_sim)
+        np.random.seed(seed_sim)
+
+    # grid of common phases over the full cycle
+    grid_phases = np.linspace(0, 2 * np.pi, n_grid, endpoint=False)
+
+    all_results_list = []
+    unique_contexts = obs[context_col].unique()
+
+    for context_label in unique_contexts:
+        print(f"Simulating technical grid for context: {context_label}")
+        # library-size pool for THIS context (all its cells = all replicates)
+        lib_pool = obs.loc[obs[context_col] == context_label, "library_size"].values
+        if len(lib_pool) == 0:
+            continue
+
+        fourier_coeffs = fourier_coefficients_y[context_label]
+
+        ctx_gen_data = []
+        ctx_lib_sizes = []
+        ctx_sample_names = []
+        ctx_grid_phase = []  # carried via s_ext_time (injected common phase)
+        ctx_true_times = []
+
+        for k, phi_k in enumerate(grid_phases):
+            for run_idx in range(n_sim_runs):
+                sim_lib_sizes = np.random.choice(
+                    lib_pool, size=n_cells_per_gridpoint, replace=True
+                )
+                # common-phase twin: every cell shares phi_k (sigma_bio = 0)
+                true_phases = np.full(n_cells_per_gridpoint, phi_k)
+
+                generated_data = simulate_data_no_context(
+                    phases=true_phases,
+                    seq_depths=sim_lib_sizes,
+                    fourier_coefficients=fourier_coeffs,
+                    context_label=context_label,
+                    noise_model=cmodel.noise_model,
+                    dispersion=cmodel.disp,
+                )
+
+                output_sample_name = f"grid{k}_run{run_idx}"
+                ctx_gen_data.append(generated_data)
+                ctx_lib_sizes.append(sim_lib_sizes)
+                ctx_sample_names.extend([output_sample_name] * n_cells_per_gridpoint)
+                ctx_grid_phase.extend([phi_k] * n_cells_per_gridpoint)
+                ctx_true_times.extend(list(true_phases))
+
+        if not ctx_gen_data:
+            continue
+
+        # single batched inference for the whole context (reuses the sim inference path)
+        context_results = _infer_phases_for_context(
+            generated_data=np.concatenate(ctx_gen_data, axis=0),
+            library_sizes=np.concatenate(ctx_lib_sizes, axis=0),
+            fourier_coefficients=fourier_coeffs,
+            cmodel=cmodel,
+            device=device,
+            context_label=context_label,
+            simulated_sample_names=ctx_sample_names,
+            s_ext_time=ctx_grid_phase,  # injected common phase phi_k
+            s_true_time=ctx_true_times,
+            n_epochs_training=0,
+            posterior_cell_chunk=posterior_cell_chunk,
+        )
+        all_results_list.extend(context_results)
+
+    if not all_results_list:
+        return pd.DataFrame(
+            columns=[
+                "context", "grid_idx", "grid_phase", "run_id",
+                "post_mode", "post_mean", "post_std", "sample_name",
+            ]
+        )
+
+    df_grid = pd.DataFrame(all_results_list)
+    # 'ext_time' holds the injected common phase phi_k; 'sample_name' encodes grid/run
+    df_grid = df_grid.rename(columns={"ext_time": "grid_phase"})
+    df_grid["grid_idx"] = df_grid["sample_name"].str.extract(r"grid(\d+)_").astype(int)
+    df_grid["run_id"] = df_grid["sample_name"].str.extract(r"(run\d+)$")
+    return df_grid

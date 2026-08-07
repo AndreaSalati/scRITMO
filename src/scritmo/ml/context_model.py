@@ -24,8 +24,10 @@ from scritmo import (
     mean_AE,
 )
 from scritmo import median_dispersion, cSTD
-from .simulations.estimate_desynchrony import estimate_desynchrony
-from .simulations.simulate_populations import simulate_cell_populations
+from .simulations.simulate_populations import (
+    simulate_cell_populations,
+    simulate_technical_grid,
+)
 from .ensemble import EnsembleMixin
 from .unspliced.unspliced_deg import UnsplicedMixin
 from .unspliced.fisher import FisherUncertaintyMixin
@@ -33,16 +35,19 @@ from .analysis_utils import (
     create_results_dataframe,
     desync_results,
     desync_means,
-    desync_results_posterior,
+    aggregate_technical_rao,
+    aggregate_technical_harmonic,
 )
 from .genome_fit import GenomeFitMixin
+from .desync_mixin import DesynchronyMixin
 from .null_model import NullModelMixin
 
 circSTD = partial(cSTD, adjust=True)
 
 
-class ContextModel(
+class Scritmo(
     nn.Module,
+    DesynchronyMixin,
     EnsembleMixin,
     UnsplicedMixin,
     MarginalizationMixin,
@@ -51,8 +56,40 @@ class ContextModel(
     NullModelMixin,
 ):
     """
-    A deterministic model that uses Simpson's rule for integration
-    and focuses only on the loss term involving marginalize_theta.
+    scRITMO circadian phase-inference model for single-cell RNA-seq.
+
+    Each gene is modeled as a harmonic (Fourier) function of an unobserved
+    circadian phase, with Negative-Binomial (or Poisson) counts. Per-cell phases
+    are not point parameters: the likelihood is marginalized over a fixed phase
+    grid (``Nx`` points on the circle, integrated with Simpson's rule or a plain
+    sum), which yields a full posterior over phase for every cell. Gene
+    parameters fit during training are the log-mesor (``m_g``), the harmonic
+    acrophase (``acrophase``) and amplitude (``log_amp``), plus dispersion.
+
+    The model is a composition of ``nn.Module`` and several mixins, each adding a
+    family of methods:
+      - ``MarginalizationMixin``  — the marginal likelihood / training loss.
+      - ``DesynchronyMixin``      — marginal-likelihood desynchrony (``estimate_sigma``).
+      - ``EnsembleMixin``         — feature-bagged (gene-subset) ensembles.
+      - ``UnsplicedMixin``        — joint spliced/unspliced modeling.
+      - ``FisherUncertaintyMixin``— Fisher/Cramér–Rao per-cell phase uncertainty.
+      - ``GenomeFitMixin``        — genome-wide gene refitting at fixed phases.
+      - ``NullModelMixin``        — flat-amplitude null NB fit for comparison.
+
+    Optional features (selected via the ``mp`` dict and ``context_mode``): per-
+    context intercepts/amplitude scaling, batch-effect phase shifts, a soft
+    Von-Mises prior on the acrophases (``k_beta``), per-gene weights, fixed-phase
+    inference, and a phase-entropy regularizer.
+
+    Construct directly with ``Scritmo(mp, y, ...)``, via the
+    :meth:`from_params_g` classmethod, or (most commonly) through
+    ``scritmo.ml.warmup_and_train(...)``, which assembles ``mp``/``y`` and returns
+    a trained instance.
+
+    Note
+    ----
+    ``ContextModel`` is a backward-compatible alias for this class (its historical
+    name); the two are the same object.
     """
 
     def __init__(
@@ -68,11 +105,28 @@ class ContextModel(
         entropy_factor=None,
     ):
         """
-        Initialize the context model with flexible context effects.
+        Initialize the Scritmo model from an assembled parameter/data bundle.
+
+        Most callers do not build ``mp``/``y`` by hand — they use
+        ``scritmo.ml.warmup_and_train(...)`` (or :meth:`from_params_g`), which
+        assembles them and returns a trained model.
 
         Args:
-            mp: Model parameters dictionary with initial values
-            y: Data tensor of shape [Nx, Nc, Ng]
+            mp: Model-parameters dict holding initial values and data. Required keys:
+                - "params_g": a ``Beta`` DataFrame with columns "a_0" (log-mesor),
+                  "amp", "phase" — seeds the gene parameters and the harmonic order.
+                - "counts": per-cell library sizes, shape [Nc].
+                - "context": per-cell context labels, shape [Nc] (the design matrix
+                  is built from these).
+                Optional keys:
+                - "phi_init": acrophase initialization decoupled from the prior
+                  center (lets phi_g start away from the reference template).
+                - "k_beta": concentration of the soft Von-Mises prior on acrophases.
+                - "batch", "kappa_b", "phi_b", "fixed_prior": batch-effect phase shifts.
+                - "weights_g": per-gene loss weights, shape [Ng].
+                - "fixed_cell_phases": if given, run in fixed-cell-phase mode (Nx=1).
+                - "unspliced_mode": enable joint spliced/unspliced modeling.
+            y: Data tensor of shape [Nx, Nc, Ng] (phase grid × cells × genes).
             context_mode: String controlling which context effects to use
                 - "none": No context effects (baseline model)
                 - "intercept": Only use category-specific intercepts (m_yg)
@@ -153,7 +207,17 @@ class ContextModel(
         # parameters
         ###############
 
-        acrophase_tensor = tt(mp["params_g"]["phase"].values, dtype=torch.float32)
+        # Acrophase INITIALIZATION. By default seeded from the reference template
+        # (mp["params_g"]["phase"]). An optional mp["phi_init"] decouples the init from
+        # the reference so phi_g can start AWAY from truth (e.g. perturbed/random) while
+        # the Von-Mises prior below stays centered on the reference (prior_g). Backward
+        # compatible: absent/None -> identical to the original behavior.
+        if mp.get("phi_init") is not None:
+            acrophase_tensor = tt(
+                np.asarray(mp["phi_init"], dtype=float), dtype=torch.float32
+            )
+        else:
+            acrophase_tensor = tt(mp["params_g"]["phase"].values, dtype=torch.float32)
 
         # Original amplitude values
         amp_values = tt(mp["params_g"]["amp"].values, dtype=torch.float32)
@@ -243,7 +307,7 @@ class ContextModel(
 
         Typical use:
             params_g = sr.Beta("saved_params.csv")
-            cmodel = ContextModel.from_params_g(params_g)
+            cmodel = Scritmo.from_params_g(params_g)
             # later, with real adata:
             data_c, mp = assemble_mp(adata, params_g, labels=np.ones(Nc), ...)
             cmodel.get_inferred_phases(data_c, counts=mp["counts"], n_theta=100)
@@ -745,7 +809,6 @@ class ContextModel(
         seed_sim: int | None = None,
         library_size_vec=None,
         n_sim_runs=1,
-        return_posteriors=False,
         use_circular_mean=False,
         posterior_cell_chunk=None,
     ):
@@ -770,8 +833,37 @@ class ContextModel(
             seed_sim=seed_sim,
             library_size_vec=library_size_vec,
             n_sim_runs=n_sim_runs,
-            return_posteriors=return_posteriors,
             use_circular_mean=use_circular_mean,
+            posterior_cell_chunk=posterior_cell_chunk,
+        )
+
+    def simulate_technical_grid(
+        self,
+        adata,
+        context_col: str | None = None,
+        layer_to_use="spliced",
+        n_grid: int = 12,
+        n_cells_per_gridpoint: int = 1000,
+        period=24,
+        device="cuda",
+        n_sim_runs: int = 1,
+        library_size_vec=None,
+        seed_sim: int | None = None,
+        posterior_cell_chunk=None,
+    ):
+        """Wrapper around the simulate_technical_grid function (harmonic σ_tech floor)."""
+        return simulate_technical_grid(
+            cmodel=self,
+            adata=adata,
+            context_col=context_col,
+            layer_to_use=layer_to_use,
+            n_grid=n_grid,
+            n_cells_per_gridpoint=n_cells_per_gridpoint,
+            period=period,
+            device=device,
+            n_sim_runs=n_sim_runs,
+            library_size_vec=library_size_vec,
+            seed_sim=seed_sim,
             posterior_cell_chunk=posterior_cell_chunk,
         )
 
@@ -800,6 +892,66 @@ class ContextModel(
             allow_flip=allow_flip,
         )
 
+    def sigma_tech_rao_per_cell(self, adata, theta=None, layer="spliced"):
+        """Analytic Cramér–Rao σ_tech (radians) per cell, from the fitted gene template β̂.
+
+        The cheap, simulation-free counterpart of the `simulate_cell_populations(kappa=∞)` twin:
+        σ_tech = 1/√(Fisher information of phase) under the NB single-harmonic model (see
+        `scritmo.ml.cramer_rao`). v1 supports `context_mode="none"` only.
+
+        Parameters
+        ----------
+        adata : AnnData
+            Cells to evaluate. The size factor s is `self.counts` (the size factor the model was
+            actually fit with -- e.g. area-corrected for smFISH, NOT necessarily the panel-count
+            sum) when it aligns with adata (n_obs match); otherwise it falls back to
+            `adata[:, self.genes].layers[layer].sum(1)`. Using `self.counts` keeps μ consistent
+            with the fitted `a_0`. Must contain all model genes.
+        theta : np.ndarray, optional
+            Per-cell phase [rad] at which to evaluate the floor. Defaults to the model's MAP
+            (`self.post_mode_c`); pass e.g. the sample external time for a synchronized floor.
+        layer : str, default "spliced"
+            Layer used for the per-cell size factor.
+
+        Returns
+        -------
+        np.ndarray, shape (n_obs,)
+            σ_tech per cell in radians.
+        """
+        from .cramer_rao import sigma_tech_rao_per_cell
+
+        if self.context_mode != "none":
+            raise NotImplementedError(
+                "sigma_tech_rao_per_cell currently supports context_mode='none' only "
+                f"(got '{self.context_mode}'). Use sigma_tech_method='simulation' for "
+                "multi-context models."
+            )
+
+        A = nmp(self._amp_s()).reshape(-1)
+        phi = nmp(self.acrophase).reshape(-1)
+        a0 = nmp(self.m_g).reshape(-1)
+        disp = nmp(self.log_disp.exp()).reshape(-1)
+        if disp.ndim == 0 or disp.size == 1:
+            disp = np.full_like(A, float(disp))
+
+        # Size factor s: prefer the one the model was fit with (self.counts) so μ matches a_0_hat
+        # (critical when counts != panel sum, e.g. smFISH area-correction). Fall back to the layer
+        # sum only when self.counts can't be aligned to adata (different n_obs).
+        counts = nmp(self.counts).reshape(-1).astype(float)
+        if counts.shape[0] == adata.n_obs:
+            s = counts
+        else:
+            adata_sub = adata[:, self.genes]
+            X = adata_sub.layers[layer] if layer in adata_sub.layers else adata_sub.X
+            s = np.asarray(X.sum(axis=1)).reshape(-1).astype(float)
+
+        if theta is None:
+            theta = np.asarray(self.post_mode_c, dtype=float).reshape(-1)
+        else:
+            theta = np.asarray(theta, dtype=float).reshape(-1)
+
+        return sigma_tech_rao_per_cell(A, phi, a0, disp, theta, s)
+
     def estimate_phase_desynchrony(
         self,
         adata,
@@ -818,6 +970,7 @@ class ContextModel(
         n_replicates_sim: int | None = None,
         library_size_vec=None,
         n_sim_runs: int = 5,
+        posterior_cell_chunk: int | None = None,
         # --- Real Data Arguments (create_results_df) ---
         other_obs_cols: list = [],
         allow_flip: bool = False,
@@ -828,8 +981,13 @@ class ContextModel(
         n_replicates_real: int | None = None,
         seed_real: int = 42,
         seed_sim: int | None = None,
-        # --- Mode ---
-        mode: str = "point_estimate",
+        # --- Technical floor method ---
+        sigma_tech_method: str = "simulation",
+        rao_phase: str = "map",
+        # --- Harmonic floor arguments ---
+        n_grid: int = 12,
+        n_cells_per_gridpoint: int = 1000,
+        return_harmonic_diagnostics: bool = False,
         # --- Cell filtering / weighting ---
         post_std_threshold: float = np.inf,
         weight_by_post_std: bool = False,
@@ -837,29 +995,113 @@ class ContextModel(
         use_circular_mean: bool = False,
     ):
         """
-        Orchestrates the estimation of phase desynchrony by:
-        1. Creating a results DataFrame from real data.
-        2. Simulating cell populations with no phase variance (technical).
-        3. Computing biological desynchrony by comparing real and simulated dispersion.
+        Estimate biological phase desynchrony, correcting for the technical floor.
+
+        The observed spread of per-cell phases within a sample mixes true
+        biological desynchrony with technical (estimation) noise. This method
+        separates the two by comparing the real spread against a "technical twin"
+        whose only spread is estimation noise, then subtracting in quadrature
+        inside :func:`desync_results`. End to end it:
+
+        1. Builds a per-cell results DataFrame from the real data
+           (:meth:`create_results_df`), optionally filtering cells by posterior
+           phase uncertainty (``post_std_threshold``).
+        2. Estimates the technical floor with one of three methods (``sigma_tech_method``):
+             - "simulation": simulate a perfectly-synchronized population
+               (``kappa=inf``) with this model and re-infer phases, so the recovered
+               spread is purely technical (:meth:`simulate_cell_populations`).
+             - "cramer_rao": attach an analytic per-cell Cramér–Rao σ_tech
+               (:meth:`sigma_tech_rao_per_cell`) and aggregate it per
+               (context, sample) — no simulation twin.
+             - "harmonic": run the synchronized twin across a GRID of common phases
+               (:meth:`simulate_technical_grid`), fit the 12h structure of σ_tech²(φ)
+               with a 2-harmonic model, then evaluate that fitted floor at each real
+               cell's inferred phase and average within each replicate. Corrects the
+               single-φ "simulation" floor for its known phase dependence (large near
+               the Bmal1 trough, small at high expression).
+        3. Computes desynchrony per group by comparing the real dispersion to the
+           technical floor (:func:`desync_results`).
 
         Parameters
         ----------
         adata : AnnData
-            Annotated data matrix.
-        ext_phase : np.ndarray
-            External phase array for the real data.
+            Annotated data matrix; must contain ``self.genes``.
+        ext_phase : np.ndarray, optional
+            External (reference) phase per cell, in radians. If None, the cell
+            posterior estimates are used as the external frame.
         context_col : str, optional
-            Column in adata.obs defining the context (e.g., condition/genotype).
+            Column in ``adata.obs`` defining the context (e.g. condition/genotype).
+            If None, falls back to "context"; allowed to be None only when the model
+            has a single context (it is then auto-assigned).
         sample_col : str, default "sample_name"
-            Column in adata.obs defining the sample identifier.
+            Column in ``adata.obs`` identifying the biological replicate/sample.
         ext_time_col : str, default "ZTmod"
-            Column name for external time. Passed as 'ext_time_label' to simulation.
+            Column for external time; passed as ``ext_time_label`` to the simulation.
         layer : str, default "spliced"
-            The layer to use for processing and simulation.
+            AnnData layer used for real-data processing and simulation.
+        post_estimator : str, default "post_mode"
+            Per-cell posterior point estimator ("post_mode" / "post_mean") used for
+            both the results DataFrame and the dispersion computation.
+        n_cells : int, optional
+            Number of cells to simulate (simulation method). None -> match the data.
+        period : float, default 24.0
+            Circadian period, in hours.
+        device : str, default "cuda"
+            Torch device for the simulation re-inference.
+        n_epochs_training : int, default 0
+            Re-training epochs on the simulated twin (0 = reuse current gene params).
         n_replicates_sim : int, optional
-            Number of replicates to generate during simulation.
+            Number of simulated replicates per group.
+        library_size_vec : array-like, optional
+            Per-cell library sizes for the simulated population (defaults to data).
+        n_sim_runs : int, default 5
+            Number of independent simulation runs to average the technical floor over.
+        posterior_cell_chunk : int, optional
+            Chunk size for posterior inference on simulated cells (caps memory).
+        other_obs_cols : list, default []
+            Extra ``adata.obs`` columns to carry into the results DataFrame.
+        allow_flip : bool, default False
+            Allow a global 180° flip when aligning to the external frame.
+        group_cols : list, optional
+            Grouping for desynchrony aggregation. Defaults to ["context", "sample_name"].
+        disp_function : callable, default cSTD
+            Circular dispersion estimator applied per group (e.g. circular STD).
+        metrics : dict, optional
+            Custom metric callables forwarded to :func:`desync_results`.
         n_replicates_real : int, optional
-            Number of bootstrap replicates for the real data aggregation.
+            Bootstrap replicates for the real-data aggregation.
+        seed_real : int, default 42
+            RNG seed for the real-data bootstrap.
+        seed_sim : int, optional
+            RNG seed for the simulation.
+        sigma_tech_method : {"simulation", "cramer_rao", "harmonic"}, default "simulation"
+            How to estimate the technical floor (see step 2).
+        rao_phase : {"map", "ext_time"}, default "map"
+            For the Cramér–Rao method, the phase at which the analytic σ_tech is
+            evaluated: each cell's MAP phase, or its sample's synchronized phase.
+        n_grid : int, default 12
+            (harmonic method) Number of common phases on the twin grid, evenly spaced
+            over [0, 2π).
+        n_cells_per_gridpoint : int, default 1000
+            (harmonic method) Twin cells simulated per (grid point, run).
+        return_harmonic_diagnostics : bool, default False
+            (harmonic method) If True, store the fitted coefficients, raw grid points and
+            implied peak locations on ``self.harmonic_floor_diag`` for plotting/checking.
+        post_std_threshold : float, default inf
+            Drop cells whose posterior phase std exceeds this (radians) before
+            computing desynchrony. Default keeps all cells.
+        weight_by_post_std : bool, default False
+            If True, weight the desynchrony aggregation by ``post_std_c``.
+        use_circular_mean : bool, default False
+            Use the circular mean (vs. point estimate) for the simulated population means.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Per-group desynchrony table from :func:`desync_results`, with the
+            technical floor removed (biological desynchrony, plus the intermediate
+            real / technical dispersion columns). Also stores the intermediate
+            real-data frame on ``self.result_df``.
         """
 
         if context_col is None:
@@ -872,11 +1114,6 @@ class ContextModel(
                     "context_col cannot be None as there are multiple possible contexts. "
                     "Please specify the context_col argument."
                 )
-
-        # For posterior_mixture: run inference first so that post_std_c in df_real
-        # is always aligned with the passed adata (handles pre-trained loaded models).
-        if mode == "posterior_mixture":
-            self._infer_on_adata(adata, layer=layer, device=device)
 
         # 1. Generate Real Results DataFrame
         df_real = self.create_results_df(
@@ -892,12 +1129,34 @@ class ContextModel(
         )
         self.result_df = df_real
 
+        # 1a-bis. Cramér–Rao technical floor: attach the analytic per-cell sigma_tech BEFORE the
+        # post_std filter so it survives the same mask. Replaces the simulation twin below.
+        if sigma_tech_method == "cramer_rao":
+            if rao_phase == "map":
+                theta_rao = None  # sigma_tech_rao_per_cell defaults to self.post_mode_c
+            elif rao_phase == "ext_time":
+                # model-frame synchronized phase per sample = circular mean of that sample's MAP
+                # (a gauge-consistent stand-in for the sample external time; avoids mixing the
+                # external frame with the model-frame acrophases).
+                from scipy.stats import circmean
+
+                _pm = np.asarray(self.post_mode_c, dtype=float).reshape(-1)
+                _samp = adata.obs[sample_col].astype(str).values
+                theta_rao = np.empty_like(_pm)
+                for _sv in np.unique(_samp):
+                    _m = _samp == _sv
+                    theta_rao[_m] = circmean(_pm[_m], high=2 * np.pi, low=0)
+            else:
+                raise ValueError(f"Unknown rao_phase '{rao_phase}'. Use 'map' or 'ext_time'.")
+            df_real["sigma_tech_rao"] = self.sigma_tech_rao_per_cell(
+                adata, theta=theta_rao, layer=layer
+            )
+
         # 1b. Filter cells by posterior uncertainty
         if post_std_threshold < np.inf and "post_std_c" in df_real.columns:
             mask = df_real["post_std_c"] <= post_std_threshold
             n_before = len(df_real)
             df_real = df_real[mask].copy()
-            cell_keep_idx = np.where(mask.values)[0]
             print(
                 f"  post_std_threshold={post_std_threshold:.3f} rad: "
                 f"kept {len(df_real)}/{n_before} cells"
@@ -906,11 +1165,52 @@ class ContextModel(
                 raise ValueError(
                     f"post_std_threshold={post_std_threshold} filtered out all cells."
                 )
-        else:
-            cell_keep_idx = None
 
-        if mode == "point_estimate":
-            # 2a. Simulate (point estimates only)
+        if sigma_tech_method == "cramer_rao":
+            # 2a'. Analytic technical floor (no simulation twin) -> per-(context, sample) table
+            tech_agg = aggregate_technical_rao(
+                df_real,
+                group_cols=group_cols if group_cols is not None
+                else ["context", "sample_name"],
+                sigma_col="sigma_tech_rao",
+            )
+            df_sim = None
+        elif sigma_tech_method == "harmonic":
+            # 2a''. Phase-resolved floor: twin grid of common phases -> fit sigma_tech^2(phi),
+            # evaluate at each real cell's inferred phase, average within replicate.
+            df_grid = self.simulate_technical_grid(
+                adata=adata,
+                context_col=context_col,
+                layer_to_use=layer,
+                n_grid=n_grid,
+                n_cells_per_gridpoint=n_cells_per_gridpoint,
+                period=period,
+                device=device,
+                n_sim_runs=n_sim_runs,
+                library_size_vec=library_size_vec,
+                seed_sim=seed_sim,
+                posterior_cell_chunk=posterior_cell_chunk,
+            )
+            tech_agg, harmonic_coeffs = aggregate_technical_harmonic(
+                df_grid,
+                df_real,
+                group_cols=group_cols if group_cols is not None
+                else ["context", "sample_name"],
+                post_estimator=post_estimator,
+                n_replicates=n_replicates_real,
+            )
+            # sanity output: the fitted floor should show two maxima per cycle (12h structure)
+            for ctx, c in harmonic_coeffs.items():
+                print(
+                    f"  harmonic floor [{ctx}]: sigma_tech^2(phi) = "
+                    f"{c['m']:.4f} + {c['a']:.4f}*cos(2phi) + {c['b']:.4f}*sin(2phi)  "
+                    f"-> peaks at {c['peak_hours'][0]:.1f}h / {c['peak_hours'][1]:.1f}h"
+                )
+            if return_harmonic_diagnostics:
+                self.harmonic_floor_diag = harmonic_coeffs
+            df_sim = None
+        else:
+            # 2a. Simulate the technical twin (point estimates only)
             df_sim = self.simulate_cell_populations(
                 adata=adata,
                 context_col=context_col,
@@ -928,113 +1228,25 @@ class ContextModel(
                 library_size_vec=library_size_vec,
                 n_sim_runs=n_sim_runs,
                 use_circular_mean=use_circular_mean,
+                posterior_cell_chunk=posterior_cell_chunk,
             )
+            tech_agg = None
 
-            # 3a. Compute desynchrony from point estimates
-            df_final = desync_results(
-                df_real=df_real,
-                df_sim=df_sim,
-                group_cols=group_cols,
-                disp_function=disp_function,
-                post_estimator=post_estimator,
-                metrics=metrics,
-                n_replicates=n_replicates_real,
-                seed=seed_real,
-                weight_col="post_std_c" if weight_by_post_std else None,
-            )
-
-        elif mode == "posterior_mixture":
-            # posterior_xc is already populated by _infer_on_adata called above
-            real_posterior_xc = self.posterior_xc
-            if cell_keep_idx is not None:
-                real_posterior_xc = real_posterior_xc[:, cell_keep_idx]
-
-            # 2b. Simulate and return full posteriors
-            df_sim, sim_posteriors_dict = self.simulate_cell_populations(
-                adata=adata,
-                context_col=context_col,
-                n_cells=n_cells,
-                layer_to_use=layer,
-                ext_time_label=ext_time_col,
-                sample_label=sample_col,
-                kappa=np.inf,
-                period=period,
-                device=device,
-                return_sim_data=True,
-                n_epochs_training=n_epochs_training,
-                n_replicates=n_replicates_sim,
-                seed_sim=seed_sim,
-                library_size_vec=library_size_vec,
-                n_sim_runs=n_sim_runs,
-                return_posteriors=True,
-                use_circular_mean=use_circular_mean,
-            )
-
-            # 3b. Compute desynchrony from posterior mixtures
-            df_final = desync_results_posterior(
-                df_real=df_real,
-                real_posterior_xc=real_posterior_xc,
-                df_sim=df_sim,
-                sim_posteriors_dict=sim_posteriors_dict,
-                group_cols=group_cols,
-                n_replicates=n_replicates_real,
-                seed=seed_real,
-            )
-
-        else:
-            raise ValueError(
-                f"Unknown mode '{mode}'. Choose 'point_estimate' or 'posterior_mixture'."
-            )
+        # 3a. Compute desynchrony from point estimates (sim_agg short-circuits the twin)
+        df_final = desync_results(
+            df_real=df_real,
+            df_sim=df_sim,
+            sim_agg=tech_agg,
+            group_cols=group_cols,
+            disp_function=disp_function,
+            post_estimator=post_estimator,
+            metrics=metrics,
+            n_replicates=n_replicates_real,
+            seed=seed_real,
+            weight_col="post_std_c" if weight_by_post_std else None,
+        )
 
         return df_final
-
-    def _infer_on_adata(
-        self, adata, layer: str = "spliced", device: str = "cpu", n_theta: int = 100
-    ):
-        """
-        Run get_inferred_phases on an AnnData object, populating posterior_xc.
-
-        Used by estimate_phase_desynchrony(mode='posterior_mixture') to ensure
-        self.posterior_xc is aligned with the provided adata.
-
-        Parameters
-        ----------
-        adata : AnnData
-            Must contain all genes in self.genes (or a superset).
-        layer : str
-            Layer to use for count data.
-        device : str
-            Torch device.
-        n_theta : int
-            Phase grid resolution for posteriors.
-        """
-        import scipy.sparse
-
-        # Extract count matrix for model genes
-        missing = np.setdiff1d(self.genes, adata.var_names)
-        if len(missing) > 0:
-            raise ValueError(
-                f"adata is missing {len(missing)} model genes (e.g. {missing[:3]}). "
-                "Ensure adata contains all genes the model was trained on."
-            )
-        adata_sub = adata[:, self.genes]
-
-        if layer in adata_sub.layers:
-            X = adata_sub.layers[layer]
-        else:
-            X = adata_sub.X
-        if scipy.sparse.issparse(X):
-            X = X.toarray()
-        X = np.array(X, dtype=np.float32)
-
-        lib_sizes = X.sum(axis=1, keepdims=True).astype(np.float32)
-
-        data_c = torch.tensor(X, dtype=torch.float32, device=device)
-        data_c = data_c.unsqueeze(0).expand(n_theta, -1, -1)
-        counts_c = torch.tensor(lib_sizes, dtype=torch.float32, device=device)
-
-        self.to(device)
-        self.get_inferred_phases(data_c, n_theta=n_theta, counts=counts_c)
 
     def X_matrix(self, fixed_cell_mode, n_theta=None, mp=None):
 
@@ -1094,3 +1306,7 @@ def compute_nb_params(
 
 def compute_poisson_rate(E_xcg: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
     return torch.exp(E_xcg) * counts
+
+
+# Backward-compatible alias (historical name). Keep for old pickles & existing imports.
+ContextModel = Scritmo

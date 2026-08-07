@@ -1,3 +1,7 @@
 *.pyc
 /build
 /src/scritmo.egg-info
+/tests
+.DS_Store
+/dist
+

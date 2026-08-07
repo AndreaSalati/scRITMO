@@ -22,6 +22,10 @@ def hist(x, bins=30, normalize=False, ax=None):
     """
     Plot a histogram of x.
 
+    NOT circular: the bins span [x.min(), x.max()], so on a polar axes the arc
+    between max and min stays unbinned. For phases use `phist` or
+    `plot_polar_histogram`, which pin the edges to (0, 2*pi).
+
     Parameters
     ----------
     x : array-like
@@ -80,7 +84,8 @@ def phist(
             show_grid=show_grid,
             ax=ax,
         )
-    ax.hist(x, bins=bins, color=color, density=normalize)
+    x = np.mod(np.asarray(x), 2 * np.pi)
+    ax.hist(x, bins=bins, color=color, density=normalize, range=(0, 2 * np.pi))
 
     return ax, ax.figure
 
