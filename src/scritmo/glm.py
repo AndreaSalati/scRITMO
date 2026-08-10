@@ -8,7 +8,7 @@ from tqdm import tqdm
 from statsmodels.tools import add_constant
 from .beta import Beta
 from .pseudobulk import pseudobulk
-from .basics import w, rh
+from .basics import w, rh, check_library_size_fallback
 
 from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
 from sklearn.preprocessing import StandardScaler
@@ -238,13 +238,7 @@ def glm_gene_fit(
         pass
 
     if counts is None:
-        total_counts = (
-            data.X.sum(axis=1) if layer is None else data.layers[layer].sum(axis=1)
-        )
-        try:
-            counts = total_counts.A1
-        except AttributeError:
-            counts = total_counts
+        counts = check_library_size_fallback(data, layer=layer, context="glm_gene_fit")
 
     X = create_harmonic_design_matrix(
         phases.squeeze(), n_harmonics=n_harmonics, add_slope=add_slope

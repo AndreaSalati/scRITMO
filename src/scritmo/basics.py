@@ -5,6 +5,40 @@ w = 2 * np.pi / 24
 rh = w**-1
 
 
+def check_library_size_fallback(adata, layer=None, min_genes=50, min_median_counts=500.0, context=""):
+    """Guard for the `counts=None` / `library_size_vec=None` fallback that sums an
+    AnnData's own gene layer as the per-cell NB size factor. Correct for real,
+    full-transcriptome data; WRONG for a subset-of-genome simulation (e.g. ~15
+    circadian genes), where the sum is the modelled genes' own counts, not the
+    genome-wide depth the model (a_0) was calibrated against -- ~1000x too small and
+    phase-dependent. This has silently produced wrong sigma_bio recoveries more than
+    once (context_repo/COUNTS_LIBRARY_SIZE_LESSON.md).
+
+    Raises ValueError instead of returning a fallback that looks unsafe: adata has
+    few genes AND a low per-cell sum -- the fingerprint of a clock-gene-only sim, not
+    real data (which always has thousands of genes). Otherwise returns the fallback
+    counts vector (1-D np.ndarray) unchanged, so real-data callers see no behavior
+    change.
+    """
+    raw = adata.X if layer is None else adata.layers[layer]
+    counts = np.asarray(raw.sum(axis=1)).reshape(-1)
+    n_genes = adata.shape[1]
+    median_counts = float(np.median(counts))
+    if n_genes < min_genes and median_counts < min_median_counts:
+        where = f" in {context}" if context else ""
+        raise ValueError(
+            f"counts/library_size fallback looks unsafe{where}: adata has only "
+            f"{n_genes} genes (<{min_genes}) and the layer-sum median is "
+            f"{median_counts:.1f} counts/cell (<{min_median_counts:.0f}). This looks "
+            "like a subset-of-genome simulation, where the modelled genes' own count "
+            "sum is NOT the genome-wide library size the model was calibrated "
+            "against. Pass the real per-cell library size explicitly "
+            "(counts=... / library_size_vec=...). See "
+            "context_repo/COUNTS_LIBRARY_SIZE_LESSON.md."
+        )
+    return counts
+
+
 def LL(y_true, y_pred):
     return -np.sum((y_true - y_pred) ** 2 / y_true.var())
 

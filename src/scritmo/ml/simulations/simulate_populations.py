@@ -8,7 +8,6 @@ import seaborn as sns
 import anndata
 from scipy.stats import circstd, circmean
 
-from scipy.sparse import csr_matrix
 import scritmo as sr
 from scritmo import w, rh, ccg
 import seaborn as sns
@@ -153,7 +152,9 @@ def simulate_cell_populations(
     obs[sample_label] = obs[sample_label].astype(str)
 
     if library_size_vec is None:
-        obs["library_size"] = csr_matrix(adata.layers[layer_to_use]).sum(axis=1).A1
+        obs["library_size"] = sr.check_library_size_fallback(
+            adata, layer=layer_to_use, context="simulate_cell_populations"
+        )
     else:
         obs["library_size"] = library_size_vec
 
@@ -364,7 +365,9 @@ def simulate_technical_grid(
         if model_counts.shape[0] == adata.n_obs:
             obs["library_size"] = model_counts
         else:
-            obs["library_size"] = csr_matrix(adata.layers[layer_to_use]).sum(axis=1).A1
+            obs["library_size"] = sr.check_library_size_fallback(
+                adata, layer=layer_to_use, context="simulate_technical_grid"
+            )
 
     if seed_sim is not None:
         torch.manual_seed(seed_sim)

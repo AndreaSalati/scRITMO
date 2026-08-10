@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from scritmo import Beta, optimal_shift
+from scritmo import Beta, optimal_shift, check_library_size_fallback
 import pandas as pd
 import json
 from scipy.stats import circstd, circmean
@@ -347,14 +347,7 @@ def assemble_mp(
         mp["unspliced_mode"] = True
 
     if counts is None:
-        if layer is None:
-            counts = adata.X.sum(axis=1)
-        else:
-            counts = adata.layers[layer].sum(axis=1)
-        try:
-            counts = counts.A1
-        except AttributeError:
-            counts = counts
+        counts = check_library_size_fallback(adata, layer=layer, context="assemble_mp")
 
     if counts.ndim == 1:
         counts = counts.squeeze()[:, None]
