@@ -165,7 +165,7 @@ def desync_results(
     # 5. Compute Biological Desynchrony (Quadrature Difference)
 
     df_mixed["Bio_cSTD"] = np.sqrt(
-        df_mixed["Data_cSTD"] ** 2 - df_mixed["Technical_cSTD"] ** 2
+        np.maximum(df_mixed["Data_cSTD"] ** 2 - df_mixed["Technical_cSTD"] ** 2, 0)
     )
     df_mixed["Bio_R"] = cstd2R(df_mixed["Bio_cSTD"] / rh)
 
