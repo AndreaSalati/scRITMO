@@ -842,7 +842,7 @@ class Scritmo(
         adata,
         context_col: str | None = None,
         layer_to_use="spliced",
-        n_grid: int = 12,
+        n_grid: int = 24,
         n_cells_per_gridpoint: int = 1000,
         period=24,
         device="cuda",
@@ -985,10 +985,10 @@ class Scritmo(
         sigma_tech_method: str = "simulation",
         rao_phase: str = "map",
         # --- Harmonic floor arguments ---
-        n_grid: int = 12,
+        n_grid: int = 24,
         n_cells_per_gridpoint: int = 1000,
         return_harmonic_diagnostics: bool = False,
-        harmonic_orders=(2,),
+        harmonic_orders=(1, 2, 3),
         # --- Cell filtering / weighting ---
         post_std_threshold: float = np.inf,
         weight_by_post_std: bool = False,
@@ -1082,9 +1082,10 @@ class Scritmo(
         rao_phase : {"map", "ext_time"}, default "map"
             For the Cramér–Rao method, the phase at which the analytic σ_tech is
             evaluated: each cell's MAP phase, or its sample's synchronized phase.
-        n_grid : int, default 12
+        n_grid : int, default 24
             (harmonic method) Number of common phases on the twin grid, evenly spaced
-            over [0, 2π).
+            over [0, 2π). Raised from 12 on 2026-08-11 together with the wider
+            ``harmonic_orders`` default, so the 7-coefficient fit is not over-parametrised.
         n_cells_per_gridpoint : int, default 1000
             (harmonic method) Twin cells simulated per (grid point, run).
         return_harmonic_diagnostics : bool, default False
@@ -1093,13 +1094,14 @@ class Scritmo(
             ``grid_phase``/``grid_var`` there are the RAW Monte-Carlo σ_tech² points the fit
             was made to, so data-vs-fit adequacy can be judged directly; ``coef`` evaluates
             via :func:`scritmo.ml.analysis_utils.eval_harmonic_floor_multi`.
-        harmonic_orders : tuple of int, default (2,)
+        harmonic_orders : tuple of int, default (1, 2, 3)
             (harmonic method) Harmonic orders in the floor
-            σ_tech²(φ) = m + Σ_k [a_k·cos(kφ) + b_k·sin(kφ)]. The default ``(2,)`` is the
-            12h-only form (one sinusoidal gene's Fisher information is 12h-periodic). With a
-            multi-gene template the 24h (k=1) term is generally present and can dominate, in
-            which case a 12h-only fit is nearly flat and mis-corrects each sample — pass
-            ``(1, 2)`` to admit it.
+            σ_tech²(φ) = m + Σ_k [a_k·cos(kφ) + b_k·sin(kφ)]. Was ``(2,)`` (12h only, from the
+            single-gene Fisher-information argument) until 2026-08-11; that basis explained
+            R²=0.013 of the raw twin grid on a 15-gene template — it collapsed to a near-flat
+            line and mis-corrected every sample. ``(1, 2, 3)`` is where both the 15-gene sim
+            and the 4-gene SABER-FISH panel saturate. Pass ``(2,)`` to reproduce older results.
+            Fits 1 + 2·len(orders) coefficients, so keep ``n_grid`` comfortably above that.
         post_std_threshold : float, default inf
             Drop cells whose posterior phase std exceeds this (radians) before
             computing desynchrony. Default keeps all cells.

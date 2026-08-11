@@ -545,15 +545,25 @@ def _harmonic_design(x_phase, orders):
     return np.column_stack(cols)
 
 
-def fit_harmonic_floor_multi(x_phase, y_var, orders=(2,)):
+def fit_harmonic_floor_multi(x_phase, y_var, orders=(1, 2, 3)):
     """OLS fit of σ_tech²(φ) = m + Σ_k [a_k·cos(kφ) + b_k·sin(kφ)] over `orders`.
 
     Generalises :func:`fit_harmonic_floor`, which is the ``orders=(2,)`` special case (the
-    12h-only form). That default was chosen because a single sinusoidal gene's Fisher
-    information is 12h-periodic — but with many genes at different acrophases the total
-    information also carries a 24h (k=1) component, and in the 15-gene clock reference that
-    component DOMINATES (~40% of the mean vs ~8% at 12h), so a 12h-only fit comes out nearly
-    flat and mis-corrects each sample. Pass ``orders=(1, 2)`` to admit both.
+    12h-only form that used to be the default). 12h-only was chosen because a single
+    sinusoidal gene's Fisher information is 12h-periodic — but with many genes at different
+    acrophases the total information also carries 24h (k=1) and 8h (k=3) components, and
+    which one dominates depends on the panel. Measured R² on the raw twin grid
+    (``review/scripts/run_harmonic_floor_fit.py``, 2026-08-11):
+
+        basis        15-gene clock sim   4-gene SABER-FISH
+        (2,)                     0.013               0.754
+        (1,2)                    0.766               0.959
+        (1,2,3)                  0.922               0.969
+
+    i.e. 12h-only explained essentially *nothing* on the 15-gene template (it collapsed to a
+    near-flat line and mis-corrected every sample), while ``(1,2,3)`` is where both panels
+    saturate — hence the default. Needs ``n_grid >= 8`` to avoid over-parametrising the 7
+    coefficients; the pipeline default is now ``n_grid=24``.
 
     Parameters
     ----------
@@ -561,8 +571,8 @@ def fit_harmonic_floor_multi(x_phase, y_var, orders=(2,)):
         Grid phases (radians), in the same frame F will be evaluated at.
     y_var : array-like
         σ_tech² at each grid phase (variance, i.e. cSTD²).
-    orders : tuple of int, default (2,)
-        Harmonic orders to include. ``(2,)`` reproduces the legacy fit exactly.
+    orders : tuple of int, default (1, 2, 3)
+        Harmonic orders to include. ``(2,)`` reproduces the legacy 12h-only fit exactly.
 
     Returns
     -------
@@ -665,7 +675,7 @@ def aggregate_technical_harmonic(
     group_cols: list = None,
     post_estimator: str = "post_mode",
     n_replicates: int | None = None,
-    harmonic_orders=(2,),
+    harmonic_orders=(1, 2, 3),
 ):
     """Phase-resolved ("harmonic") technical floor, with the SAME output schema as
     `aggregate_simulated_results` (context, sample_name, Technical_cSTD[rad], Technical_R) so
@@ -675,9 +685,9 @@ def aggregate_technical_harmonic(
       1. Per context, per (grid_idx, run_id) of the twin grid (`df_grid` from
          :func:`scritmo.ml.simulations.simulate_technical_grid`): x_k = the injected common
          phase `grid_phase`, y_k = sr.cSTD(post_mode)² (variance). Fit the floor via
-         :func:`fit_harmonic_floor_multi` over `harmonic_orders` (default ``(2,)`` = the
-         legacy 12h-only form; ``(1, 2)`` also admits the 24h component, which dominates
-         for a multi-gene template). (The injected φ_k is the right x-axis: generation and
+         :func:`fit_harmonic_floor_multi` over `harmonic_orders` (default ``(1, 2, 3)``;
+         pass ``(2,)`` for the legacy 12h-only form, which under-fits badly — see that
+         function's docstring for the measured R²). (The injected φ_k is the right x-axis: generation and
          re-inference share the model's acrophases, so the inferred frame coincides with the
          injected frame -- and a uniform grid keeps the OLS design orthogonal. The real cells
          in step 2 are inferred with the same template, so F is evaluated in the same frame.)

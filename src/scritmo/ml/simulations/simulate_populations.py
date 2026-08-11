@@ -302,7 +302,7 @@ def simulate_technical_grid(
     adata,
     context_col: str | None = None,
     layer_to_use="spliced",
-    n_grid: int = 12,
+    n_grid: int = 24,
     n_cells_per_gridpoint: int = 1000,
     period=24,
     device="cuda",
@@ -328,7 +328,10 @@ def simulate_technical_grid(
 
     Parameters mirror :func:`simulate_cell_populations` where shared. ``n_grid`` grid points,
     ``n_cells_per_gridpoint`` twin cells per (grid point, run), ``n_sim_runs`` independent
-    runs per grid point (more runs -> more fit points for the 2-harmonic OLS).
+    runs per grid point (more runs -> more fit points for the floor OLS). ``n_grid`` default
+    was raised 12 -> 24 on 2026-08-11, when the fitted basis widened from 12h-only (3
+    coefficients) to orders (1,2,3) (7 coefficients); see
+    :func:`scritmo.ml.analysis_utils.fit_harmonic_floor_multi`.
 
     Returns
     -------
