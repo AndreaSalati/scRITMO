@@ -927,6 +927,7 @@ class Scritmo(
         n_cells_per_gridpoint: int = 1000,
         return_harmonic_diagnostics: bool = False,
         harmonic_orders=(1, 2, 3),
+        harmonic_eval: str = "sample",
         # --- Cell filtering / weighting ---
         post_std_threshold: float = np.inf,
         weight_by_post_std: bool = False,
@@ -1034,6 +1035,17 @@ class Scritmo(
             line and mis-corrected every sample. ``(1, 2, 3)`` is where both the 15-gene sim
             and the 4-gene SABER-FISH panel saturate. Pass ``(2,)`` to reproduce older results.
             Fits 1 + 2·len(orders) coefficients, so keep ``n_grid`` comfortably above that.
+        harmonic_eval : {"sample", "per_cell"}, default "sample"
+            (harmonic method) Where the fitted floor σ_tech²(φ) is evaluated.
+            ``"sample"`` uses ONE phase per (context, sample) — the same phase the simulation
+            twin would be generated at, selected by ``use_circular_mean`` (False → the sample's
+            external time, True → the circular mean of its inferred phases).
+            ``"per_cell"`` is the pre-2026-08-11 behaviour: evaluate at every cell's inferred
+            phase and average. That is biased — the floor is curved, so averaging over a spread
+            of phases flattens it (Jensen), and the width of that spread is σ_tech itself, so
+            the error grows exactly where a phase-resolved floor should help. Kept only for
+            reproducibility; see
+            :func:`scritmo.ml.analysis_utils.aggregate_technical_harmonic` for the measured cost.
         post_std_threshold : float, default inf
             Drop cells whose posterior phase std exceeds this (radians) before
             computing desynchrony. Default keeps all cells.
@@ -1127,6 +1139,11 @@ class Scritmo(
                 post_estimator=post_estimator,
                 n_replicates=n_replicates_real,
                 harmonic_orders=harmonic_orders,
+                # evaluate the fitted floor at the SAME phase the simulation twin would be
+                # generated at, so the two methods differ only in how the floor is obtained
+                use_circular_mean=use_circular_mean,
+                harmonic_eval=harmonic_eval,
+                period=period,
             )
             # sanity output: terms actually fitted, plus how well they explain the raw grid
             for ctx, c in harmonic_coeffs.items():

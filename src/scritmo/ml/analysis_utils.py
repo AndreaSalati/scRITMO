@@ -7,6 +7,7 @@ from .simulations.utils import assign_replicates
 from scritmo import cstd2R, R2cstd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from scipy.stats import circmean  # same estimator simulate_cell_populations uses
 
 
 def create_results_dataframe(
@@ -644,6 +645,10 @@ def aggregate_technical_harmonic(
     post_estimator: str = "post_mode",
     n_replicates: int | None = None,
     harmonic_orders=(1, 2, 3),
+    use_circular_mean: bool = False,
+    ext_time_col: str = "ext_time_hours",
+    harmonic_eval: str = "sample",
+    period: float = 24.0,
 ):
     """Phase-resolved ("harmonic") technical floor, with the SAME output schema as
     `aggregate_simulated_results` (context, sample_name, Technical_cSTD[rad], Technical_R) so
@@ -659,11 +664,31 @@ def aggregate_technical_harmonic(
          re-inference share the model's acrophases, so the inferred frame coincides with the
          injected frame -- and a uniform grid keeps the OLS design orthogonal. The real cells
          in step 2 are inferred with the same template, so F is evaluated in the same frame.)
-      2. Evaluate F(θ_c) at each REAL cell's inferred phase (`post_estimator` column) using
-         that cell's context coefficients.
-      3. Per (context, sample_name): Technical_cSTD = sqrt(mean_c F(θ_c)); Technical_R = cstd2R.
+      2. Evaluate F at ONE phase per (context, sample_name) group -- the same phase the
+         simulation twin would be generated at, selected by `use_circular_mean` exactly as in
+         :func:`simulate_cell_populations`:
+           False (default) -> the sample's external time (`ext_time_col`, hours -> rad);
+           True            -> the circular mean of that sample's inferred phases.
+         Set `harmonic_eval="per_cell"` for the LEGACY behaviour (evaluate F at every cell's
+         inferred phase and average). That is biased -- see the note below.
+      3. Per (context, sample_name): Technical_cSTD = sqrt(F(φ_sample)); Technical_R = cstd2R.
       4. If `n_replicates` is set, broadcast each sample's floor to its `_1.._n` splits to
          match the renaming `aggregate_real_results` does (else `desync_results`' map -> NaN).
+
+    Why NOT per-cell (changed 2026-08-11)
+    -------------------------------------
+    F is CURVED, so by Jensen's inequality ``mean_c F(θ_c) != F(mean θ)``: averaging over a
+    spread of phases inflates the floor in a convex region (a trough) and deflates it near a
+    peak. Because F is roughly sinusoidal, that flattens the fitted floor toward its own mean --
+    and the width of the averaging window is σ_tech ITSELF, so the damage grows exactly where a
+    phase-resolved floor is supposed to help. Measured on the Fig-1 sim (12 populations,
+    `review/scripts/run_harmonic_floor_diagnose.py`): at 3k UMI per-cell averaging collapsed the
+    floor's range across populations from **2.11 h to 0.83 h**, and its RMS deviation from the
+    per-group twin floor was **0.44 h vs 0.14 h** when read at the sample's known external time.
+    Per-population σ_bio error over 3k/10k/100k: 0.399 h (per-cell) -> 0.248 h (per-sample);
+    the twin itself gets 0.193 h. Per-cell evaluation is only defensible when the within-sample
+    spread is genuinely BIOLOGICAL (cells really at different phases), and the inferred spread
+    cannot distinguish that from technical noise -- hence the per-sample default.
 
     Returns
     -------
@@ -705,25 +730,63 @@ def aggregate_technical_harmonic(
             "peak_hours": peak_hours,
         }
 
-    # --- 2. Evaluate the floor at each real cell's inferred phase ---
+    # --- 2. Evaluate the floor, then 3. reduce to one value per (context, sample) ---
     df_real = df_real.copy()
     for col in group_cols:
         df_real[col] = df_real[col].astype(str)
 
-    floor_var = np.empty(len(df_real), dtype=float)
-    ctx_vals = df_real["context"].values
-    theta_vals = df_real[post_estimator].values
-    for context_label, c in coeffs.items():
-        mask = ctx_vals == context_label
-        floor_var[mask] = eval_harmonic_floor_multi(theta_vals[mask], c["coef"])
-    df_real = df_real.assign(_floor_var=floor_var)
+    if harmonic_eval not in ("sample", "per_cell"):
+        raise ValueError(
+            f"harmonic_eval must be 'sample' or 'per_cell', got {harmonic_eval!r}"
+        )
 
-    # --- 3. Per-(context, sample) floor: mean variance -> sqrt at the very end ---
-    final_stats = (
-        df_real.groupby(group_cols)["_floor_var"]
-        .mean()
-        .reset_index(name="_floor_var")
-    )
+    if harmonic_eval == "per_cell":
+        # LEGACY (pre-2026-08-11): F at every cell's inferred phase, averaged. Biased by
+        # Jensen -- see the docstring. Kept only to reproduce older results.
+        floor_var = np.empty(len(df_real), dtype=float)
+        ctx_vals = df_real["context"].values
+        theta_vals = df_real[post_estimator].values
+        for context_label, c in coeffs.items():
+            mask = ctx_vals == context_label
+            floor_var[mask] = eval_harmonic_floor_multi(theta_vals[mask], c["coef"])
+        final_stats = (
+            df_real.assign(_floor_var=floor_var)
+            .groupby(group_cols)["_floor_var"]
+            .mean()
+            .reset_index(name="_floor_var")
+        )
+    else:
+        # ONE phase per sample, chosen exactly as simulate_cell_populations chooses the phase
+        # its twin is generated at, so the two floors are computed at the same place.
+        have_ext = ext_time_col in df_real.columns
+        if not use_circular_mean and not have_ext:
+            print(
+                f"  WARNING: use_circular_mean=False needs '{ext_time_col}' in the results "
+                "frame (it comes from create_results_df's ext_time_col); falling back to the "
+                "circular mean of the inferred phases."
+            )
+        rows = []
+        for keys, grp in df_real.groupby(group_cols):
+            keys = keys if isinstance(keys, tuple) else (keys,)
+            ctx = str(dict(zip(group_cols, keys))["context"])
+            if use_circular_mean or not have_ext:
+                phi = float(circmean(grp[post_estimator].values, high=2 * np.pi, low=0))
+            else:
+                # hours -> rad, matching simulations.utils.get_ext_time(convert_rad=True)
+                phi = float(
+                    (float(grp[ext_time_col].iloc[0]) % period) / period * 2 * np.pi
+                )
+            rows.append(
+                dict(
+                    zip(group_cols, keys),
+                    _floor_var=float(
+                        eval_harmonic_floor_multi(np.array([phi]), coeffs[ctx]["coef"])[0]
+                    ),
+                    _floor_phase=phi,
+                )
+            )
+        final_stats = pd.DataFrame(rows).drop(columns=["_floor_phase"])
+
     final_stats["Technical_cSTD"] = np.sqrt(final_stats["_floor_var"])
     final_stats = final_stats.drop(columns=["_floor_var"])
 
