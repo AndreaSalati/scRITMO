@@ -988,11 +988,14 @@ class Scritmo(
         n_grid: int = 12,
         n_cells_per_gridpoint: int = 1000,
         return_harmonic_diagnostics: bool = False,
+        harmonic_orders=(2,),
         # --- Cell filtering / weighting ---
         post_std_threshold: float = np.inf,
         weight_by_post_std: bool = False,
         # --- Simulation mean estimation ---
         use_circular_mean: bool = False,
+        # --- Over-subtraction policy ---
+        clamp_bio_variance: bool = True,
     ):
         """
         Estimate biological phase desynchrony, correcting for the technical floor.
@@ -1087,6 +1090,16 @@ class Scritmo(
         return_harmonic_diagnostics : bool, default False
             (harmonic method) If True, store the fitted coefficients, raw grid points and
             implied peak locations on ``self.harmonic_floor_diag`` for plotting/checking.
+            ``grid_phase``/``grid_var`` there are the RAW Monte-Carlo σ_tech² points the fit
+            was made to, so data-vs-fit adequacy can be judged directly; ``coef`` evaluates
+            via :func:`scritmo.ml.analysis_utils.eval_harmonic_floor_multi`.
+        harmonic_orders : tuple of int, default (2,)
+            (harmonic method) Harmonic orders in the floor
+            σ_tech²(φ) = m + Σ_k [a_k·cos(kφ) + b_k·sin(kφ)]. The default ``(2,)`` is the
+            12h-only form (one sinusoidal gene's Fisher information is 12h-periodic). With a
+            multi-gene template the 24h (k=1) term is generally present and can dominate, in
+            which case a 12h-only fit is nearly flat and mis-corrects each sample — pass
+            ``(1, 2)`` to admit it.
         post_std_threshold : float, default inf
             Drop cells whose posterior phase std exceeds this (radians) before
             computing desynchrony. Default keeps all cells.
@@ -1094,6 +1107,13 @@ class Scritmo(
             If True, weight the desynchrony aggregation by ``post_std_c``.
         use_circular_mean : bool, default False
             Use the circular mean (vs. point estimate) for the simulated population means.
+        clamp_bio_variance : bool, default True
+            What to do where the technical floor exceeds the observed spread
+            (``sigma_data^2 - sigma_tech^2 < 0``). True clamps the difference to 0, so
+            ``Bio_cSTD`` is 0 there; False leaves it NaN, which marks the over-corrected
+            groups instead of pulling them to zero (they then drop out of the aggregate
+            in :func:`desync_means` rather than entering it as zeros). See
+            :func:`desync_results`.
 
         Returns
         -------
@@ -1198,13 +1218,20 @@ class Scritmo(
                 else ["context", "sample_name"],
                 post_estimator=post_estimator,
                 n_replicates=n_replicates_real,
+                harmonic_orders=harmonic_orders,
             )
-            # sanity output: the fitted floor should show two maxima per cycle (12h structure)
+            # sanity output: terms actually fitted, plus how well they explain the raw grid
             for ctx, c in harmonic_coeffs.items():
+                terms = "".join(
+                    f" + {c['coef']['a'][k]:.4f}*cos({k}phi)"
+                    f" + {c['coef']['b'][k]:.4f}*sin({k}phi)"
+                    for k in c["coef"]["orders"]
+                )
+                peaks = " / ".join(f"{p:.1f}h" for p in c["peak_hours"])
                 print(
                     f"  harmonic floor [{ctx}]: sigma_tech^2(phi) = "
-                    f"{c['m']:.4f} + {c['a']:.4f}*cos(2phi) + {c['b']:.4f}*sin(2phi)  "
-                    f"-> peaks at {c['peak_hours'][0]:.1f}h / {c['peak_hours'][1]:.1f}h"
+                    f"{c['m']:.4f}{terms}  -> peaks at {peaks}  "
+                    f"(R^2={c['r2']:.3f} on the raw grid)"
                 )
             if return_harmonic_diagnostics:
                 self.harmonic_floor_diag = harmonic_coeffs
@@ -1244,6 +1271,7 @@ class Scritmo(
             n_replicates=n_replicates_real,
             seed=seed_real,
             weight_col="post_std_c" if weight_by_post_std else None,
+            clamp_bio_variance=clamp_bio_variance,
         )
 
         return df_final

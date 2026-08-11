@@ -73,6 +73,20 @@ def create_results_dataframe(
     return df_res
 
 
+def _bio_variance(data_var, tech_var, clamp: bool):
+    """sigma_data^2 - sigma_tech^2, either clamped at 0 or left to go NaN under sqrt.
+
+    Single source of truth for the over-subtraction policy, shared by `desync_results`
+    (per-timepoint Bio_cSTD) and `desync_means` (per-batch Bio_Var + the aggregate).
+    With clamp=False the negative entries are mapped to NaN explicitly rather than left
+    for `np.sqrt` to warn about.
+    """
+    diff = np.asarray(data_var, dtype=float) - np.asarray(tech_var, dtype=float)
+    if clamp:
+        return np.maximum(diff, 0.0)
+    return np.where(diff < 0.0, np.nan, diff)
+
+
 def desync_results(
     df_real,
     df_sim,
@@ -90,6 +104,7 @@ def desync_results(
     # precomputed technical floor (Cramér–Rao branch): if given, df_sim is ignored and this
     # per-(context, sample) table supplies Technical_cSTD/Technical_R directly.
     sim_agg: pd.DataFrame | None = None,
+    clamp_bio_variance: bool = True,
 ):
     """
     First it aggregates data by calling aggregate_real_results and aggregate_simulated_results,
@@ -99,6 +114,15 @@ def desync_results(
     `sim_agg` lets a caller bypass the simulation twin: pass a precomputed technical table (same
     schema as `aggregate_simulated_results`: context, sample_name, Technical_cSTD[rad], Technical_R)
     and `df_sim` is not used. This is the analytic Cramér–Rao path (`aggregate_technical_rao`).
+
+    `clamp_bio_variance` controls what happens when the technical floor EXCEEDS the observed
+    spread, i.e. sigma_data^2 - sigma_tech^2 < 0:
+      True  (default) -- clamp the difference to 0, so Bio_cSTD is 0 there. Hides the
+             over-subtraction but keeps every timepoint plottable/fittable.
+      False -- leave it negative, so Bio_cSTD is NaN there. The over-corrected timepoints
+             become visible and are EXCLUDED from downstream fits instead of being pulled
+             to 0, which biases a slope fit less than a floor of zeros does.
+    Use False to audit how often the floor over-corrects (see `run_fig2g_ablation.py`).
 
     TO BE FIXED: Currently the group cols can only be two: context and sample_name.
     columns with another names will create problems
@@ -165,7 +189,11 @@ def desync_results(
     # 5. Compute Biological Desynchrony (Quadrature Difference)
 
     df_mixed["Bio_cSTD"] = np.sqrt(
-        np.maximum(df_mixed["Data_cSTD"] ** 2 - df_mixed["Technical_cSTD"] ** 2, 0)
+        _bio_variance(
+            df_mixed["Data_cSTD"] ** 2,
+            df_mixed["Technical_cSTD"] ** 2,
+            clamp_bio_variance,
+        )
     )
     df_mixed["Bio_R"] = cstd2R(df_mixed["Bio_cSTD"] / rh)
 
@@ -213,12 +241,19 @@ def _weighted_se_bio_cSTD(bio_vars, weights, final_bio_var):
     return se_bio_cSTD
 
 
-def desync_means(df_desync):
+def desync_means(df_desync, clamp_bio_variance: bool = True):
+    """Aggregate a per-batch desync table to one row per context.
+
+    `clamp_bio_variance` has the same meaning as in `desync_results`: True clamps a
+    negative sigma_data^2 - sigma_tech^2 to 0, False lets it become NaN. With False the
+    over-corrected batches drop out of the weighted means (via `np.average` on masked
+    weights) instead of entering them as zeros.
+    """
     context_u = df_desync["context"].unique()
     df_desync["Technical_cSTD2"] = df_desync["Technical_cSTD"] ** 2
     df_desync["Data_cSTD2"] = df_desync["Data_cSTD"] ** 2
-    df_desync["Bio_Var"] = np.maximum(
-        df_desync["Data_cSTD2"] - df_desync["Technical_cSTD2"], 0
+    df_desync["Bio_Var"] = _bio_variance(
+        df_desync["Data_cSTD2"], df_desync["Technical_cSTD2"], clamp_bio_variance
     )
 
     results = []
@@ -237,22 +272,48 @@ def desync_means(df_desync):
         else:
             condition = None
 
-        weights = df_ct["group_size"].values
+        # With clamp_bio_variance=False the over-corrected batches carry a NaN Bio_Var.
+        # Drop them from the weighted means rather than let one NaN poison the whole
+        # context (clamp=True never produces NaN, so this mask is all-True there and the
+        # historical result is unchanged).
+        bio_var_b = df_ct["Bio_Var"].values.astype(float)
+        valid = np.isfinite(bio_var_b)
+        weights = df_ct["group_size"].values[valid]
+        n_dropped = int((~valid).sum())
+        if weights.size == 0:
+            results.append(
+                {
+                    "ct": ct,
+                    "Technical_cSTD": np.nan,
+                    "Bio_cSTD": np.nan,
+                    "Bio_cSTD_SE": np.nan,
+                    "Data_cSTD": np.nan,
+                    "n_batches_dropped": n_dropped,
+                    "organ": organ,
+                    "celltype": celltype,
+                    "condition": condition,
+                }
+            )
+            continue
 
         weighted_mean_technical_var = np.average(
-            df_ct["Technical_cSTD2"], weights=weights
+            df_ct["Technical_cSTD2"].values[valid], weights=weights
         )
-        weighted_mean_data_var = np.average(df_ct["Data_cSTD2"], weights=weights)
+        weighted_mean_data_var = np.average(
+            df_ct["Data_cSTD2"].values[valid], weights=weights
+        )
 
-        final_bio_var = np.maximum(
-            weighted_mean_data_var - weighted_mean_technical_var, 0
+        final_bio_var = float(
+            _bio_variance(
+                weighted_mean_data_var, weighted_mean_technical_var, clamp_bio_variance
+            )
         )
         final_bio_cSTD = np.sqrt(final_bio_var)
         final_technical_cSTD = np.sqrt(weighted_mean_technical_var)
         final_data_cSTD = np.sqrt(weighted_mean_data_var)
 
         se_bio_cSTD = _weighted_se_bio_cSTD(
-            df_ct["Bio_Var"].values, weights, final_bio_var
+            bio_var_b[valid], weights, final_bio_var
         )
 
         results.append(
@@ -262,6 +323,7 @@ def desync_means(df_desync):
                 "Bio_cSTD": final_bio_cSTD,
                 "Bio_cSTD_SE": se_bio_cSTD,
                 "Data_cSTD": final_data_cSTD,
+                "n_batches_dropped": n_dropped,
                 "organ": organ,
                 "celltype": celltype,
                 "condition": condition,
@@ -274,6 +336,7 @@ def desync_means(df_desync):
             "Bio_cSTD",
             "Bio_cSTD_SE",
             "Data_cSTD",
+            "n_batches_dropped",
             "organ",
             "celltype",
             "condition",
@@ -473,6 +536,90 @@ def aggregate_technical_rao(
     return final_stats
 
 
+def _harmonic_design(x_phase, orders):
+    """Design matrix [1, cos(kφ), sin(kφ) for k in orders] for the floor OLS."""
+    x = np.asarray(x_phase, dtype=float)
+    cols = [np.ones_like(x)]
+    for k in orders:
+        cols += [np.cos(k * x), np.sin(k * x)]
+    return np.column_stack(cols)
+
+
+def fit_harmonic_floor_multi(x_phase, y_var, orders=(2,)):
+    """OLS fit of σ_tech²(φ) = m + Σ_k [a_k·cos(kφ) + b_k·sin(kφ)] over `orders`.
+
+    Generalises :func:`fit_harmonic_floor`, which is the ``orders=(2,)`` special case (the
+    12h-only form). That default was chosen because a single sinusoidal gene's Fisher
+    information is 12h-periodic — but with many genes at different acrophases the total
+    information also carries a 24h (k=1) component, and in the 15-gene clock reference that
+    component DOMINATES (~40% of the mean vs ~8% at 12h), so a 12h-only fit comes out nearly
+    flat and mis-corrects each sample. Pass ``orders=(1, 2)`` to admit both.
+
+    Parameters
+    ----------
+    x_phase : array-like
+        Grid phases (radians), in the same frame F will be evaluated at.
+    y_var : array-like
+        σ_tech² at each grid phase (variance, i.e. cSTD²).
+    orders : tuple of int, default (2,)
+        Harmonic orders to include. ``(2,)`` reproduces the legacy fit exactly.
+
+    Returns
+    -------
+    dict
+        ``{"m", "a": {k: a_k}, "b": {k: b_k}, "orders", "r2", "rmse"}``. Consume it with
+        :func:`eval_harmonic_floor_multi`.
+    """
+    orders = tuple(int(k) for k in orders)
+    x = np.asarray(x_phase, dtype=float)
+    y = np.asarray(y_var, dtype=float)
+    D = _harmonic_design(x, orders)
+    coeffs, *_ = np.linalg.lstsq(D, y, rcond=None)
+    resid = y - D @ coeffs
+    ss_tot = float(np.sum((y - y.mean()) ** 2))
+    return {
+        "m": float(coeffs[0]),
+        "a": {k: float(coeffs[1 + 2 * i]) for i, k in enumerate(orders)},
+        "b": {k: float(coeffs[2 + 2 * i]) for i, k in enumerate(orders)},
+        "orders": orders,
+        "r2": (float(1.0 - np.sum(resid**2) / ss_tot) if ss_tot > 0 else np.nan),
+        "rmse": float(np.sqrt(np.mean(resid**2))),
+    }
+
+
+def eval_harmonic_floor_multi(theta, coef):
+    """Evaluate a :func:`fit_harmonic_floor_multi` result at `theta` (σ_tech², rad²).
+
+    Clipped at 0 so fit noise can't yield a negative variance.
+    """
+    theta = np.asarray(theta, dtype=float)
+    F = np.full(np.shape(theta), float(coef["m"]), dtype=float)
+    for k in coef["orders"]:
+        F = F + coef["a"][k] * np.cos(k * theta) + coef["b"][k] * np.sin(k * theta)
+    return np.clip(F, 0.0, None)
+
+
+def harmonic_floor_peaks_hours(coef, n=720):
+    """Local maxima of the fitted floor, in hours, tallest first (max 2 returned).
+
+    For the pure 12h form the two maxima are analytic (2θ* = atan2(b, a)); for a general
+    `orders` there is no closed form, so they are located on a dense grid.
+    """
+    if tuple(coef["orders"]) == (2,):
+        theta_star = np.arctan2(coef["b"][2], coef["a"][2]) / 2.0
+        return sorted(
+            float((p % (2 * np.pi)) * rh) for p in (theta_star, theta_star + np.pi)
+        )
+    grid = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    F = eval_harmonic_floor_multi(grid, coef)
+    is_max = (F > np.roll(F, 1)) & (F > np.roll(F, -1))
+    idx = np.flatnonzero(is_max)
+    if idx.size == 0:
+        idx = np.array([int(np.argmax(F))])
+    idx = idx[np.argsort(F[idx])[::-1]][:2]
+    return sorted(float(grid[i] * rh) for i in idx)
+
+
 def fit_harmonic_floor(x_phase, y_var):
     """OLS fit of the 12h (2nd-harmonic) technical floor  y(φ) = m + a·cos(2φ) + b·sin(2φ).
 
@@ -518,6 +665,7 @@ def aggregate_technical_harmonic(
     group_cols: list = None,
     post_estimator: str = "post_mode",
     n_replicates: int | None = None,
+    harmonic_orders=(2,),
 ):
     """Phase-resolved ("harmonic") technical floor, with the SAME output schema as
     `aggregate_simulated_results` (context, sample_name, Technical_cSTD[rad], Technical_R) so
@@ -526,8 +674,10 @@ def aggregate_technical_harmonic(
     Pipeline (all averaging in VARIANCE = cSTD², root only at the very end):
       1. Per context, per (grid_idx, run_id) of the twin grid (`df_grid` from
          :func:`scritmo.ml.simulations.simulate_technical_grid`): x_k = the injected common
-         phase `grid_phase`, y_k = sr.cSTD(post_mode)² (variance). Fit (m, a, b) via
-         :func:`fit_harmonic_floor`. (The injected φ_k is the right x-axis: generation and
+         phase `grid_phase`, y_k = sr.cSTD(post_mode)² (variance). Fit the floor via
+         :func:`fit_harmonic_floor_multi` over `harmonic_orders` (default ``(2,)`` = the
+         legacy 12h-only form; ``(1, 2)`` also admits the 24h component, which dominates
+         for a multi-gene template). (The injected φ_k is the right x-axis: generation and
          re-inference share the model's acrophases, so the inferred frame coincides with the
          injected frame -- and a uniform grid keeps the OLS design orthogonal. The real cells
          in step 2 are inferred with the same template, so F is evaluated in the same frame.)
@@ -541,7 +691,12 @@ def aggregate_technical_harmonic(
     -------
     (final_stats, coeffs) : (pandas.DataFrame, dict)
         `final_stats`: the per-(context, sample_name) technical table.
-        `coeffs`: {context: {"m","a","b","grid_phase","grid_var","peak_hours"}} for diagnostics.
+        `coeffs`: {context: {"m","a","b","coef","orders","r2","rmse","grid_phase",
+        "grid_var","peak_hours"}} for diagnostics. `grid_phase`/`grid_var` are the RAW
+        Monte-Carlo grid points the fit was made to — enough to plot data vs fit and judge
+        whether the functional form is adequate; `coef` feeds
+        :func:`eval_harmonic_floor_multi`. `"a"`/`"b"` are the k=2 coefficients (NaN when 2
+        is not in `harmonic_orders`).
     """
     if group_cols is None:
         group_cols = ["context", "sample_name"]
@@ -555,14 +710,18 @@ def aggregate_technical_harmonic(
             # y = circular variance of the inferred phases at that grid point.
             x_list.append(float(df_pt["grid_phase"].iloc[0]))
             y_list.append(sr.cSTD(df_pt[post_estimator].values) ** 2)  # variance
-        m, a, b = fit_harmonic_floor(x_list, y_list)
-        # two maxima per cycle at 2θ = atan2(b, a): θ* and θ* + π
-        theta_star = np.arctan2(b, a) / 2.0
-        peak_hours = sorted(
-            float(((p % (2 * np.pi)) * rh)) for p in (theta_star, theta_star + np.pi)
-        )
+        coef = fit_harmonic_floor_multi(x_list, y_list, orders=harmonic_orders)
+        peak_hours = harmonic_floor_peaks_hours(coef)
+        # "m"/"a"/"b" stay flat scalars for the legacy 12h-only form so existing readers
+        # (printing, saved diagnostics) keep working; `coef` carries the general fit.
         coeffs[str(context_label)] = {
-            "m": m, "a": a, "b": b,
+            "m": coef["m"],
+            "a": coef["a"].get(2, np.nan),
+            "b": coef["b"].get(2, np.nan),
+            "coef": coef,
+            "orders": coef["orders"],
+            "r2": coef["r2"],
+            "rmse": coef["rmse"],
             "grid_phase": np.asarray(x_list),
             "grid_var": np.asarray(y_list),
             "peak_hours": peak_hours,
@@ -578,9 +737,7 @@ def aggregate_technical_harmonic(
     theta_vals = df_real[post_estimator].values
     for context_label, c in coeffs.items():
         mask = ctx_vals == context_label
-        floor_var[mask] = eval_harmonic_floor(
-            theta_vals[mask], c["m"], c["a"], c["b"]
-        )
+        floor_var[mask] = eval_harmonic_floor_multi(theta_vals[mask], c["coef"])
     df_real = df_real.assign(_floor_var=floor_var)
 
     # --- 3. Per-(context, sample) floor: mean variance -> sqrt at the very end ---
