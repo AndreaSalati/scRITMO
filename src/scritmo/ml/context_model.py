@@ -35,7 +35,6 @@ from .analysis_utils import (
     create_results_dataframe,
     desync_results,
     desync_means,
-    aggregate_technical_rao,
     aggregate_technical_harmonic,
 )
 from .genome_fit import GenomeFitMixin
@@ -892,66 +891,6 @@ class Scritmo(
             allow_flip=allow_flip,
         )
 
-    def sigma_tech_rao_per_cell(self, adata, theta=None, layer="spliced"):
-        """Analytic Cramér–Rao σ_tech (radians) per cell, from the fitted gene template β̂.
-
-        The cheap, simulation-free counterpart of the `simulate_cell_populations(kappa=∞)` twin:
-        σ_tech = 1/√(Fisher information of phase) under the NB single-harmonic model (see
-        `scritmo.ml.cramer_rao`). v1 supports `context_mode="none"` only.
-
-        Parameters
-        ----------
-        adata : AnnData
-            Cells to evaluate. The size factor s is `self.counts` (the size factor the model was
-            actually fit with -- e.g. area-corrected for smFISH, NOT necessarily the panel-count
-            sum) when it aligns with adata (n_obs match); otherwise it falls back to
-            `adata[:, self.genes].layers[layer].sum(1)`. Using `self.counts` keeps μ consistent
-            with the fitted `a_0`. Must contain all model genes.
-        theta : np.ndarray, optional
-            Per-cell phase [rad] at which to evaluate the floor. Defaults to the model's MAP
-            (`self.post_mode_c`); pass e.g. the sample external time for a synchronized floor.
-        layer : str, default "spliced"
-            Layer used for the per-cell size factor.
-
-        Returns
-        -------
-        np.ndarray, shape (n_obs,)
-            σ_tech per cell in radians.
-        """
-        from .cramer_rao import sigma_tech_rao_per_cell
-
-        if self.context_mode != "none":
-            raise NotImplementedError(
-                "sigma_tech_rao_per_cell currently supports context_mode='none' only "
-                f"(got '{self.context_mode}'). Use sigma_tech_method='simulation' for "
-                "multi-context models."
-            )
-
-        A = nmp(self._amp_s()).reshape(-1)
-        phi = nmp(self.acrophase).reshape(-1)
-        a0 = nmp(self.m_g).reshape(-1)
-        disp = nmp(self.log_disp.exp()).reshape(-1)
-        if disp.ndim == 0 or disp.size == 1:
-            disp = np.full_like(A, float(disp))
-
-        # Size factor s: prefer the one the model was fit with (self.counts) so μ matches a_0_hat
-        # (critical when counts != panel sum, e.g. smFISH area-correction). Fall back to the layer
-        # sum only when self.counts can't be aligned to adata (different n_obs).
-        counts = nmp(self.counts).reshape(-1).astype(float)
-        if counts.shape[0] == adata.n_obs:
-            s = counts
-        else:
-            adata_sub = adata[:, self.genes]
-            X = adata_sub.layers[layer] if layer in adata_sub.layers else adata_sub.X
-            s = np.asarray(X.sum(axis=1)).reshape(-1).astype(float)
-
-        if theta is None:
-            theta = np.asarray(self.post_mode_c, dtype=float).reshape(-1)
-        else:
-            theta = np.asarray(theta, dtype=float).reshape(-1)
-
-        return sigma_tech_rao_per_cell(A, phi, a0, disp, theta, s)
-
     def estimate_phase_desynchrony(
         self,
         adata,
@@ -983,7 +922,6 @@ class Scritmo(
         seed_sim: int | None = None,
         # --- Technical floor method ---
         sigma_tech_method: str = "simulation",
-        rao_phase: str = "map",
         # --- Harmonic floor arguments ---
         n_grid: int = 24,
         n_cells_per_gridpoint: int = 1000,
@@ -1009,13 +947,10 @@ class Scritmo(
         1. Builds a per-cell results DataFrame from the real data
            (:meth:`create_results_df`), optionally filtering cells by posterior
            phase uncertainty (``post_std_threshold``).
-        2. Estimates the technical floor with one of three methods (``sigma_tech_method``):
+        2. Estimates the technical floor with one of two methods (``sigma_tech_method``):
              - "simulation": simulate a perfectly-synchronized population
                (``kappa=inf``) with this model and re-infer phases, so the recovered
                spread is purely technical (:meth:`simulate_cell_populations`).
-             - "cramer_rao": attach an analytic per-cell Cramér–Rao σ_tech
-               (:meth:`sigma_tech_rao_per_cell`) and aggregate it per
-               (context, sample) — no simulation twin.
              - "harmonic": run the synchronized twin across a GRID of common phases
                (:meth:`simulate_technical_grid`), fit the 12h structure of σ_tech²(φ)
                with a 2-harmonic model, then evaluate that fitted floor at each real
@@ -1077,11 +1012,8 @@ class Scritmo(
             RNG seed for the real-data bootstrap.
         seed_sim : int, optional
             RNG seed for the simulation.
-        sigma_tech_method : {"simulation", "cramer_rao", "harmonic"}, default "simulation"
+        sigma_tech_method : {"simulation", "harmonic"}, default "simulation"
             How to estimate the technical floor (see step 2).
-        rao_phase : {"map", "ext_time"}, default "map"
-            For the Cramér–Rao method, the phase at which the analytic σ_tech is
-            evaluated: each cell's MAP phase, or its sample's synchronized phase.
         n_grid : int, default 24
             (harmonic method) Number of common phases on the twin grid, evenly spaced
             over [0, 2π). Raised from 12 on 2026-08-11 together with the wider
@@ -1126,6 +1058,12 @@ class Scritmo(
             real-data frame on ``self.result_df``.
         """
 
+        if sigma_tech_method not in ("simulation", "harmonic"):
+            raise ValueError(
+                f"Unknown sigma_tech_method '{sigma_tech_method}'. Use 'simulation' or 'harmonic' "
+                "('cramer_rao' was removed)."
+            )
+
         if context_col is None:
             context_col = "context"
             if len(self.context_u) == 1:
@@ -1151,29 +1089,6 @@ class Scritmo(
         )
         self.result_df = df_real
 
-        # 1a-bis. Cramér–Rao technical floor: attach the analytic per-cell sigma_tech BEFORE the
-        # post_std filter so it survives the same mask. Replaces the simulation twin below.
-        if sigma_tech_method == "cramer_rao":
-            if rao_phase == "map":
-                theta_rao = None  # sigma_tech_rao_per_cell defaults to self.post_mode_c
-            elif rao_phase == "ext_time":
-                # model-frame synchronized phase per sample = circular mean of that sample's MAP
-                # (a gauge-consistent stand-in for the sample external time; avoids mixing the
-                # external frame with the model-frame acrophases).
-                from scipy.stats import circmean
-
-                _pm = np.asarray(self.post_mode_c, dtype=float).reshape(-1)
-                _samp = adata.obs[sample_col].astype(str).values
-                theta_rao = np.empty_like(_pm)
-                for _sv in np.unique(_samp):
-                    _m = _samp == _sv
-                    theta_rao[_m] = circmean(_pm[_m], high=2 * np.pi, low=0)
-            else:
-                raise ValueError(f"Unknown rao_phase '{rao_phase}'. Use 'map' or 'ext_time'.")
-            df_real["sigma_tech_rao"] = self.sigma_tech_rao_per_cell(
-                adata, theta=theta_rao, layer=layer
-            )
-
         # 1b. Filter cells by posterior uncertainty
         if post_std_threshold < np.inf and "post_std_c" in df_real.columns:
             mask = df_real["post_std_c"] <= post_std_threshold
@@ -1188,16 +1103,7 @@ class Scritmo(
                     f"post_std_threshold={post_std_threshold} filtered out all cells."
                 )
 
-        if sigma_tech_method == "cramer_rao":
-            # 2a'. Analytic technical floor (no simulation twin) -> per-(context, sample) table
-            tech_agg = aggregate_technical_rao(
-                df_real,
-                group_cols=group_cols if group_cols is not None
-                else ["context", "sample_name"],
-                sigma_col="sigma_tech_rao",
-            )
-            df_sim = None
-        elif sigma_tech_method == "harmonic":
+        if sigma_tech_method == "harmonic":
             # 2a''. Phase-resolved floor: twin grid of common phases -> fit sigma_tech^2(phi),
             # evaluate at each real cell's inferred phase, average within replicate.
             df_grid = self.simulate_technical_grid(

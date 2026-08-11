@@ -113,7 +113,7 @@ def desync_results(
 
     `sim_agg` lets a caller bypass the simulation twin: pass a precomputed technical table (same
     schema as `aggregate_simulated_results`: context, sample_name, Technical_cSTD[rad], Technical_R)
-    and `df_sim` is not used. This is the analytic Cramér–Rao path (`aggregate_technical_rao`).
+    and `df_sim` is not used. This is the harmonic-floor path (`aggregate_technical_harmonic`).
 
     `clamp_bio_variance` controls what happens when the technical floor EXCEEDS the observed
     spread, i.e. sigma_data^2 - sigma_tech^2 < 0:
@@ -501,38 +501,6 @@ def aggregate_simulated_results(
     # Add the R conversion if needed
     final_stats["Technical_R"] = cstd2R(final_stats["Technical_cSTD"])
 
-    return final_stats
-
-
-def aggregate_technical_rao(
-    df_real: pd.DataFrame,
-    group_cols: list = None,
-    sigma_col: str = "sigma_tech_rao",
-):
-    """Aggregate the per-cell analytic Cramér–Rao σ_tech into a per-(context, sample) technical
-    floor, with the SAME output schema as `aggregate_simulated_results` (context, sample_name,
-    Technical_cSTD[rad], Technical_R) so `desync_results(..., sim_agg=...)` consumes it unchanged.
-
-    Sample-level Technical_cSTD is the circular-mixture spread of the per-cell wrapped-normal MAP
-    estimators (`cramer_rao.technical_cstd_rao`): R̄ = mean_i exp(−σ_i²/2), cSTD = √(−2 ln R̄).
-    """
-    from .cramer_rao import technical_cstd_rao
-
-    if group_cols is None:
-        group_cols = ["context", "sample_name"]
-
-    # match aggregate_real_results: stringify the group keys so the desync_results merge aligns
-    # (real_agg stringifies; without this, numeric sample ids like smFISH ZT mismatch -> NaN floor).
-    df_real = df_real.copy()
-    for col in group_cols:
-        df_real[col] = df_real[col].astype(str)
-
-    final_stats = (
-        df_real.groupby(group_cols)[sigma_col]
-        .apply(lambda s: technical_cstd_rao(s.values))
-        .reset_index(name="Technical_cSTD")
-    )
-    final_stats["Technical_R"] = cstd2R(final_stats["Technical_cSTD"])
     return final_stats
 
 
