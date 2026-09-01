@@ -81,6 +81,15 @@ def circ_std_P(P):
     return std
 
 
+def _set_shape_grad(self, flag):
+    """Toggle training of the gene-shape parameters, whichever parameterization is in
+    use: (log_amp, acrophase) at nh == 1, ab_cart at nh > 1."""
+    for name in ("log_amp", "acrophase", "ab_cart"):
+        p = getattr(self, name, None)
+        if isinstance(p, torch.nn.Parameter):
+            p.requires_grad = flag
+
+
 def set_context_mode(self, context_mode):
     """
     Method to change the context mode during training/inference.
@@ -125,18 +134,16 @@ def set_context_mode(self, context_mode):
     elif context_mode == "context_only":
         # Only allow context adjustments
         self.m_g.requires_grad = False
-        self.log_amp.requires_grad = False
-        self.acrophase.requires_grad = False
+        _set_shape_grad(self, False)
         self.m_yg.requires_grad = True
         self.log_lambda_y.requires_grad = True
 
     elif context_mode == "disp_only":
         # block everything, fit only disp
         self.m_g.requires_grad = False
-        self.log_amp.requires_grad = False
+        _set_shape_grad(self, False)
         self.m_yg.requires_grad = False
         self.log_lambda_y.requires_grad = False
-        self.acrophase.requires_grad = False
 
     else:
         raise ValueError(f"Unknown context_mode: {context_mode}")
@@ -277,6 +284,12 @@ def get_params_g(
     return params_g
 
 
+def _densify(X):
+    """Return a dense float array whether X is sparse (scRNA-seq) or already dense
+    (e.g. CyTOF arcsinh intensities, which have no zero structure to exploit)."""
+    return X.toarray() if hasattr(X, "toarray") else np.asarray(X)
+
+
 def assemble_mp(
     adata,
     params_g,
@@ -326,9 +339,9 @@ def assemble_mp(
     mp = {}
 
     if layer is None:
-        data = adata[:, genes].X.toarray()
+        data = _densify(adata[:, genes].X)
     else:
-        data = adata[:, genes].layers[layer].toarray()
+        data = _densify(adata[:, genes].layers[layer])
     # create training data tensor
     data_c = torch.tensor(data, dtype=torch.float32, device=device)
 
@@ -338,7 +351,7 @@ def assemble_mp(
         data_c = data_c.unsqueeze(0)
 
     if unspliced_layer is not None:
-        data_u = adata[:, genes].layers[unspliced_layer].toarray()
+        data_u = _densify(adata[:, genes].layers[unspliced_layer])
         data_u_c = torch.tensor(data_u, dtype=torch.float32, device=device)
         if fixed_cell_phases is None:
             data_u_c = data_u_c.unsqueeze(0).expand(n_theta, Nc, Ng)

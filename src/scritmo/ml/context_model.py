@@ -207,47 +207,90 @@ class Scritmo(
         # parameters
         ###############
 
-        # Acrophase INITIALIZATION. By default seeded from the reference template
-        # (mp["params_g"]["phase"]). An optional mp["phi_init"] decouples the init from
-        # the reference so phi_g can start AWAY from truth (e.g. perturbed/random) while
-        # the Von-Mises prior below stays centered on the reference (prior_g). Backward
-        # compatible: absent/None -> identical to the original behavior.
-        if mp.get("phi_init") is not None:
-            acrophase_tensor = tt(
-                np.asarray(mp["phi_init"], dtype=float), dtype=torch.float32
-            )
-        else:
-            acrophase_tensor = tt(mp["params_g"]["phase"].values, dtype=torch.float32)
+        # Shape parameters. Two parameterizations, selected by the harmonic order:
+        #
+        #   nh == 1 -> POLAR (amplitude + acrophase). One harmonic has exactly one
+        #             amplitude and one acrophase, both directly interpretable, and
+        #             fix_phase can hold the acrophase while the amplitude still trains.
+        #   nh >  1 -> CARTESIAN (the a_h / b_h coefficients are the parameters). With
+        #             several harmonics the polar form buys nothing: there is no single
+        #             "the acrophase" to read off or to freeze, and the peak of the
+        #             resulting curve is a function of all the coefficients together.
+        #             Fitting the coefficients directly also makes the model linear in
+        #             its shape parameters, which removes the vanishing gradient the log
+        #             amplitude has at zero.
+        #
+        # Both paths feed the same _get_ab(), which returns (2*nh, Ng) in the BLOCKED
+        # order harmonic_dm_torch produces: [a_1..a_nh, b_1..b_nh].
+        self.cartesian_mode = self.nh > 1
 
-        # Original amplitude values
-        amp_values = tt(mp["params_g"]["amp"].values, dtype=torch.float32)
-        if log_amp_fn == "logit":
-            safe_amp = torch.clamp(amp_values, min=1e-2, max=self.max_amp - 1e-2)
-            # The ratio is now guaranteed to be in a safe sub-interval of (0, 1)
-            log_amp = torch.logit(safe_amp / self.max_amp)
-            self.log_amp = nn.Parameter(log_amp)
-        elif log_amp_fn == "log":
-            log_amp = torch.log(amp_values)
-            self.log_amp = nn.Parameter(log_amp)
+        if not self.cartesian_mode:
+            # Acrophase INITIALIZATION. By default seeded from the reference template
+            # (mp["params_g"]["phase"]). An optional mp["phi_init"] decouples the init
+            # from the reference so phi_g can start AWAY from truth (e.g.
+            # perturbed/random) while the Von-Mises prior below stays centered on the
+            # reference (prior_g). Backward compatible: absent/None -> identical to the
+            # original behavior.
+            if mp.get("phi_init") is not None:
+                acrophase_tensor = tt(
+                    np.asarray(mp["phi_init"], dtype=float), dtype=torch.float32
+                )
+            else:
+                acrophase_tensor = tt(
+                    mp["params_g"]["phase"].values, dtype=torch.float32
+                )
 
-        # Base parameters
-        if fix_phase:
-            self.register_buffer("acrophase", acrophase_tensor)
+            # Original amplitude values
+            amp_values = tt(mp["params_g"]["amp"].values, dtype=torch.float32)
+            if log_amp_fn == "logit":
+                safe_amp = torch.clamp(amp_values, min=1e-2, max=self.max_amp - 1e-2)
+                # The ratio is now guaranteed to be in a safe sub-interval of (0, 1)
+                log_amp = torch.logit(safe_amp / self.max_amp)
+                self.log_amp = nn.Parameter(log_amp)
+            elif log_amp_fn == "log":
+                log_amp = torch.log(amp_values)
+                self.log_amp = nn.Parameter(log_amp)
+
+            # Base parameters
+            if fix_phase:
+                self.register_buffer("acrophase", acrophase_tensor)
+            else:
+                self.acrophase = nn.Parameter(acrophase_tensor)
         else:
-            self.acrophase = nn.Parameter(acrophase_tensor)
+            if mp.get("phi_init") is not None:
+                raise ValueError(
+                    "phi_init is a polar-parameterization option and has no meaning "
+                    f"with nh={self.nh}; seed the a_h/b_h columns of params_g instead."
+                )
+            ab_seed = self._ab_from_params_g(mp["params_g"])
+            if fix_phase:
+                # There is no separate acrophase to hold here, so fix_phase freezes the
+                # whole shape, amplitude included. Callers wanting a trainable shape
+                # must pass fix_phase=False.
+                self.register_buffer("ab_cart", ab_seed)
+            else:
+                self.ab_cart = nn.Parameter(ab_seed)
 
         self.m_g = nn.Parameter(tt(mp["params_g"]["a_0"].values, dtype=torch.float32))
 
         if self.unspliced_mode:
+            self._assert_single_harmonic("unspliced_mode")
             self.prepare_unspliced_genes(mp)
 
         # beta prior parameters
         if "k_beta" in mp and mp["k_beta"] is not None:
             self.register_buffer("k_beta", tt(mp["k_beta"]).to(y.device))
-            self.register_buffer(
-                "prior_g",
-                tt(mp["params_g"]["phase"].values, dtype=torch.float32).to(y.device),
-            )
+            if self.cartesian_mode:
+                # Gaussian anchor on the coefficients: the cartesian counterpart of the
+                # Von-Mises prior on the acrophase, since there is no acrophase to put a
+                # circular prior on. Keeps the fitted shape near the reference template
+                # and pins the otherwise free global rotation of theta.
+                self.register_buffer("ab_prior", ab_seed.clone().to(y.device))
+            else:
+                self.register_buffer(
+                    "prior_g",
+                    tt(mp["params_g"]["phase"].values, dtype=torch.float32).to(y.device),
+                )
         else:
             self.k_beta = None
 
@@ -263,7 +306,10 @@ class Scritmo(
             else:
                 self.log_disp = nn.Parameter(-torch.ones(self.Ng))
         else:
-            self.log_disp = nn.Parameter(tt(np.log(fix_disp_val)))
+            # np.log returns float64; keep it float32 so the model can live on MPS
+            self.log_disp = nn.Parameter(
+                tt(np.log(fix_disp_val), dtype=torch.float32)
+            )
             self.log_disp.requires_grad = False
 
         # context related parameters
@@ -420,6 +466,9 @@ class Scritmo(
 
         if self.k_beta is None:
             return tt(0.0, device=self.dev)
+        elif self.cartesian_mode:
+            # Gaussian log-density (up to a constant) around the seeded coefficients.
+            return -0.5 * self.k_beta * ((self.ab_cart - self.ab_prior) ** 2).sum()
         else:
             prior_g = log_von_mises(self.acrophase, self.prior_g, self.k_beta)
             return prior_g.sum()
@@ -617,6 +666,7 @@ class Scritmo(
         # Convert tensors to numpy arrays
 
         if unspliced:
+            self._assert_single_harmonic("get_parameter_dataframe(unspliced=True)")
             a_0_np = nmp(self.m_u_g).squeeze()
             ab_np = nmp(self._get_ab_u()).T
             gene_names = self.genes
@@ -628,6 +678,11 @@ class Scritmo(
 
         # Determine number of harmonics
         n_harmonics = ab_np.shape[1] // 2
+
+        # _get_ab is BLOCKED [a_1..a_nh, b_1..b_nh]; Beta wants them INTERLEAVED
+        # [a_1, b_1, a_2, b_2, ...]. Identity when nh == 1.
+        order = [i for h in range(n_harmonics) for i in (h, n_harmonics + h)]
+        ab_np = ab_np[:, order]
 
         # Create column names
         col_names = ["a_0"] + [
@@ -653,7 +708,33 @@ class Scritmo(
             amp = torch.exp(self.log_amp)
             return amp
 
+    def _assert_single_harmonic(self, what):
+        """Guard for the parts of the model that are written for one harmonic only.
+
+        The unspliced, extra-gene, genome-refit and Cramer-Rao code paths all assume a
+        (2, Ng) coefficient matrix and a single acrophase per gene. They are untouched
+        by the multi-harmonic switch and would return silently wrong numbers.
+        """
+        if self.nh > 1:
+            raise NotImplementedError(
+                f"{what} supports a single harmonic only (got nh={self.nh})."
+            )
+
+    def _ab_from_params_g(self, params_g):
+        """Seed the cartesian coefficients from a Beta table.
+
+        Beta stores harmonics INTERLEAVED (a_0, a_1, b_1, a_2, b_2, ...) while the
+        design matrix from harmonic_dm_torch is BLOCKED (cos_1..cos_nh, sin_1..sin_nh).
+        This is the conversion between the two.
+        """
+        a = np.stack([params_g[f"a_{h}"].values for h in range(1, self.nh + 1)])
+        b = np.stack([params_g[f"b_{h}"].values for h in range(1, self.nh + 1)])
+        return tt(np.concatenate([a, b], axis=0), dtype=torch.float32)
+
     def _get_ab(self):
+        """Harmonic coefficients as (2*nh, Ng), blocked [a_1..a_nh, b_1..b_nh]."""
+        if self.cartesian_mode:
+            return self.ab_cart
         amp = self._amp_s()
         cos = amp * torch.cos(self.acrophase).unsqueeze(0)
         sin = amp * torch.sin(self.acrophase).unsqueeze(0)
@@ -782,9 +863,14 @@ class Scritmo(
             return torch.distributions.Poisson(rate=rate)
 
         elif self.noise_model == "gaussian":
-            # Gaussian distribution with mean E_xcg and fixed std dev
-            std_dev = 1.0
-            return torch.distributions.Normal(loc=E_xcg, scale=std_dev)
+            # Gaussian likelihood on already-transformed continuous data (e.g. CyTOF
+            # arcsinh(x/5) intensities). Here E_xcg IS the mean, not a log-rate, and
+            # there is no library-size factor, so `counts` is deliberately ignored.
+            # `disp` is reinterpreted as the standard deviation sigma (per-gene when
+            # fix_disp_val="gene", per-context when "context", scalar otherwise), so
+            # it is trained the same way the NB dispersion is.
+            sigma = disp.clamp(min=1e-3)
+            return torch.distributions.Normal(loc=E_xcg, scale=sigma)
 
         else:
             raise NotImplementedError(
@@ -919,6 +1005,8 @@ class Scritmo(
             σ_tech per cell in radians.
         """
         from .cramer_rao import sigma_tech_rao_per_cell
+
+        self._assert_single_harmonic("sigma_tech_rao_per_cell")
 
         if self.context_mode != "none":
             raise NotImplementedError(
