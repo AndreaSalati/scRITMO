@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import warnings
 from scritmo import Beta, optimal_shift, check_library_size_fallback
 import pandas as pd
 import json
@@ -81,13 +82,98 @@ def circ_std_P(P):
     return std
 
 
-def set_context_mode(self, context_mode):
+_DEVICE_WARNED = False
+
+# context_mode values that belong to the abandoned "cellular context" research
+# direction (per-context intercepts / amplitude scaling). Kept working for the
+# paper scripts and old pickles, but no longer part of the recommended API.
+_LEGACY_CONTEXT_MODES = frozenset(
+    {"intercept", "lambda", "full", "full_lambda", "context_only"}
+)
+
+
+def resolve_device(device=None, verbose=True):
     """
-    Method to change the context mode during training/inference.
+    Resolve a requested device to one that actually exists on this machine.
+
+    ``None``, ``"auto"`` and ``"cuda"`` all fall back to ``"cpu"`` when CUDA is
+    unavailable, so the library's historical ``device="cuda"`` defaults keep
+    working on a laptop without every caller having to guard them.
+
+    MPS is never chosen by the fallback: several ops used by the model (and
+    float64) are unsupported there. An explicit ``device="mps"`` is honoured.
 
     Args:
-        context_mode: String, one of "none", "intercept", or "full"
+        device: A device string, a ``torch.device``, ``None`` or ``"auto"``.
+        verbose: Print a one-time notice when a requested CUDA device is
+            unavailable and CPU is used instead.
+
+    Returns:
+        A device string that is safe to pass to ``torch.tensor(device=...)``
+        and ``nn.Module.to(...)``.
     """
+    global _DEVICE_WARNED
+
+    if isinstance(device, torch.device):
+        device = str(device)
+
+    if device is None or device == "auto":
+        device = "cuda"
+
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        if verbose and not _DEVICE_WARNED:
+            print(f"device '{device}' is not available, falling back to 'cpu'")
+            _DEVICE_WARNED = True
+        return "cpu"
+
+    if device.startswith("mps") and not torch.backends.mps.is_available():
+        if verbose and not _DEVICE_WARNED:
+            print(f"device '{device}' is not available, falling back to 'cpu'")
+            _DEVICE_WARNED = True
+        return "cpu"
+
+    return device
+
+
+def set_context_mode(self, context_mode):
+    """
+    Set which parameter groups are trainable, and freeze the rest.
+
+    Bound as a method on :class:`~scritmo.ml.context_model.Scritmo`. Called once
+    from ``__init__``; can also be called later to change the regime between
+    training rounds.
+
+    Two modes are in current use:
+        - "none"      : the standard model. Mesor, acrophase, amplitude and
+                        dispersion are fit; the legacy context terms stay frozen
+                        at their zero init, so the model reduces exactly to the
+                        no-context form.
+        - "disp_only" : freeze every gene parameter (mesor, acrophase, amplitude)
+                        and fit only the dispersion. Used to re-estimate
+                        dispersion against a fixed reference template.
+
+    The remaining modes belong to the abandoned "cellular context" direction
+    (per-context intercepts ``m_yg`` and amplitude scaling ``log_lambda_y``) and
+    raise a ``DeprecationWarning``. They are kept only so the paper scripts and
+    old pickles keep reproducing: "intercept" (m_yg only), "lambda"
+    (log_lambda_y only), "full" and "full_lambda" (both, the latter with a
+    per-gene lambda), "context_only" (both, with the gene parameters frozen).
+    Note that ``m_g`` is frozen whenever a context intercept is fit, to keep the
+    mesor identifiable.
+
+    Args:
+        context_mode: One of "none", "disp_only", "intercept", "lambda",
+            "full", "full_lambda", "context_only".
+    """
+    if context_mode in _LEGACY_CONTEXT_MODES:
+        warnings.warn(
+            f"context_mode='{context_mode}' belongs to the abandoned cellular-context "
+            "research direction and is kept only for backward compatibility. "
+            "Use context_mode='none' (the default).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     self.context_mode = context_mode
 
     # Update requires_grad based on context_mode
@@ -299,14 +385,16 @@ def assemble_mp(
         DataFrame with the model parameters for each gene.
     counts : np.ndarray
         Array with the counts for each cell.
-    labels : np.ndarray
-        Array with the labels for each cell.
+    labels : np.ndarray or None
+        Per-cell context labels (legacy). None means "one global context" and is
+        turned into a vector of ones by the model.
     layer : str
         Layer to use for the data. If None, use adata.X.
     n_theta : int
         Number of grid points to use in the unit circle.
     device : str
-        Device to use for the model. 'gpu' or 'cpu'.
+        Device to use for the model. Resolved with `resolve_device`, so the
+        "cuda" default falls back to CPU on a machine without a GPU.
     unspliced_layer : str
         Layer to use for unspliced data. If None, no unspliced counts.
     Returns
@@ -316,6 +404,8 @@ def assemble_mp(
     mp : dict
         Model parameters for the model.
     """
+
+    device = resolve_device(device)
 
     # send error if params_g.index is not all included in adata.var_names
     if not np.all(np.isin(params_g.index.values, adata.var_names)):
@@ -362,7 +452,9 @@ def assemble_mp(
     )
     mp["params_g"] = Beta(params_g)
 
-    mp["context"] = np.array(labels)
+    # None is passed through: the model turns it into a vector of ones (one global
+    # context). np.array(None) would give a 0-d object array instead.
+    mp["context"] = None if labels is None else np.array(labels)
 
     if unspliced_layer is not None:
         mp["counts_u"] = None

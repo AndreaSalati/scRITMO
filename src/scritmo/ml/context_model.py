@@ -8,7 +8,13 @@ from functools import partial
 from .marginalization import MarginalizationMixin
 import anndata
 import pandas as pd
-from .utils import harmonic_dm_torch, circ_std_P, set_context_mode, nmp
+from .utils import (
+    harmonic_dm_torch,
+    circ_std_P,
+    set_context_mode,
+    nmp,
+    resolve_device,
+)
 from .misc.power_spherical.power_spherical import (
     log_von_mises,
 )
@@ -75,10 +81,10 @@ class Scritmo(
       - ``GenomeFitMixin``        — genome-wide gene refitting at fixed phases.
       - ``NullModelMixin``        — flat-amplitude null NB fit for comparison.
 
-    Optional features (selected via the ``mp`` dict and ``context_mode``): per-
-    context intercepts/amplitude scaling, batch-effect phase shifts, a soft
-    Von-Mises prior on the acrophases (``k_beta``), per-gene weights, fixed-phase
-    inference, and a phase-entropy regularizer.
+    Optional features (selected via the ``mp`` dict): a soft Von-Mises prior on
+    the acrophases (``k_beta``), an acrophase initialization decoupled from that
+    prior (``phi_init``), batch-effect phase shifts, per-gene loss weights,
+    fixed-phase inference, and a phase-entropy regularizer.
 
     Construct directly with ``Scritmo(mp, y, ...)``, via the
     :meth:`from_params_g` classmethod, or (most commonly) through
@@ -89,6 +95,21 @@ class Scritmo(
     ----
     ``ContextModel`` is a backward-compatible alias for this class (its historical
     name); the two are the same object.
+
+    Legacy
+    ------
+    The class was originally written to ask whether the cellular context (e.g.
+    celltype identity) reshapes a gene's Fourier coefficients, hence the historical
+    name and the per-context intercept/amplitude parameters (``m_yg``,
+    ``log_lambda_y``, selected by ``context_mode``). That research direction was
+    abandoned. Those parameters are initialized to zero and frozen under the
+    default ``context_mode="none"``, so the model reduces exactly to the
+    no-context form; they survive only so old pickles and the paper scripts keep
+    reproducing. See ``context_mode`` in :meth:`__init__` and
+    :func:`scritmo.ml.utils.set_context_mode`. Per-cell context labels
+    (``mp["context"]``) are likewise optional — ``None`` means one global context.
+    The unrelated ``context_col`` argument of the desynchrony methods is still
+    live: there it is just the ``adata.obs`` column used to group samples.
     """
 
     def __init__(
@@ -115,9 +136,9 @@ class Scritmo(
                 - "params_g": a ``Beta`` DataFrame with columns "a_0" (log-mesor),
                   "amp", "phase" — seeds the gene parameters and the harmonic order.
                 - "counts": per-cell library sizes, shape [Nc].
-                - "context": per-cell context labels, shape [Nc] (the design matrix
-                  is built from these).
                 Optional keys:
+                - "context": per-cell context labels, shape [Nc] (legacy). Absent
+                  or None means one global context, i.e. a vector of ones.
                 - "phi_init": acrophase initialization decoupled from the prior
                   center (lets phi_g start away from the reference template).
                 - "k_beta": concentration of the soft Von-Mises prior on acrophases.
@@ -126,18 +147,23 @@ class Scritmo(
                 - "fixed_cell_phases": if given, run in fixed-cell-phase mode (Nx=1).
                 - "unspliced_mode": enable joint spliced/unspliced modeling.
             y: Data tensor of shape [Nx, Nc, Ng] (phase grid × cells × genes).
-            context_mode: String controlling which context effects to use
-                - "none": No context effects (baseline model)
-                - "intercept": Only use category-specific intercepts (m_yg)
-                - "full": Use both intercepts and amplitude scaling (m_yg and lambda)
-                - "full_lambda" Lambda is also gene dependent here
-                - "context_only" Keeps Betas fixed, fits intercept and scaling
+            context_mode: Which parameter groups are trainable. Two values are in
+                current use:
+                - "none": the standard model (default). Mesor, acrophase, amplitude
+                  and dispersion are fit; the legacy context terms stay frozen at
+                  zero, so this is exactly the no-context model.
+                - "disp_only": freeze every gene parameter and fit only dispersion.
+                Legacy (abandoned cellular-context direction; these emit a
+                DeprecationWarning and are kept only for reproducibility):
+                "intercept", "lambda", "full", "full_lambda", "context_only".
+                See :func:`scritmo.ml.utils.set_context_mode`.
             fix_phase: If True, acrophase parameters are fixed (not trained)
             noise_model: "nb" for Negative Binomial, "poisson" for Poisson
             fix_disp_val: Controls dispersion initialization and shape.
                 - "gene": Per-gene dispersion (Ng,), trainable. If params_g has a "disp"
                   column (e.g. from a previous run), warm-starts from those values.
-                - "context": Per-context dispersion (Ny, 1), trainable.
+                - "context": Per-context dispersion (Ny, 1), trainable (legacy;
+                  equivalent to a single scalar when there is one context).
                 - None: Single scalar dispersion, trainable.
                 - float: Fixed scalar dispersion, not trained.
             log_amp_fn: "logit" or "log" to control amplitude parameterization
@@ -153,14 +179,20 @@ class Scritmo(
         self.Nx, self.Nc, self.Ng = y.shape
         self.nh = mp["params_g"].num_harmonics()
         self.dev = y.device
-        # self.dm = self.design_matrix(mp["context"])
-        self.register_buffer("dm", self.design_matrix(mp["context"]))
+
+        # Per-cell context labels are optional: absent or None means one global
+        # context, i.e. a single-column design matrix of ones.
+        context = mp.get("context")
+        if context is None:
+            context = np.ones(self.Nc)
+
+        self.register_buffer("dm", self.design_matrix(context))
         self.Ny = self.dm.shape[1]
         self.method = method
         self.entropy_factor = entropy_factor
         self.register_buffer("counts", mp["counts"].clone())
-        self.context = mp["context"]
-        self.context_u = np.unique(mp["context"])
+        self.context = context
+        self.context_u = np.unique(context)
         self.genes = mp["params_g"].index.values
         self.fix_phase = fix_phase
         self.max_amp = 8 / (2 * np.log2(np.e))  # log2fc of 8
@@ -265,7 +297,12 @@ class Scritmo(
             self.log_disp = nn.Parameter(tt(np.log(fix_disp_val)))
             self.log_disp.requires_grad = False
 
-        # context related parameters
+        # LEGACY: per-context intercepts (m_yg) and amplitude scaling
+        # (log_lambda_y) from the abandoned cellular-context direction. Both are
+        # zero-initialized -> intercept offset 0 and exp(0) = 1 amplitude scale, and
+        # set_context_mode("none") freezes them, so the default model is exactly the
+        # no-context model. Kept so old pickles stay loadable and the paper scripts
+        # keep reproducing; see the class docstring.
         self.m_yg = (
             nn.Parameter(mp["m_yg"].clone().detach())
             if "m_yg" in mp
@@ -295,7 +332,7 @@ class Scritmo(
         device="cpu",
     ):
         """
-        Initialize a ContextModel from gene parameters only, without adata.
+        Initialize a Scritmo model from gene parameters only, without adata.
 
         Creates a model with gene parameters loaded from params_g but with
         no real dataset attached.  Dataset-specific buffers (X, dm, counts)
@@ -308,29 +345,31 @@ class Scritmo(
             params_g = sr.Beta("saved_params.csv")
             cmodel = Scritmo.from_params_g(params_g)
             # later, with real adata:
-            data_c, mp = assemble_mp(adata, params_g, labels=np.ones(Nc), ...)
+            data_c, mp = assemble_mp(adata, params_g, labels=None, ...)
             cmodel.get_inferred_phases(data_c, counts=mp["counts"], n_theta=100)
             bic_df = cmodel.fit_null_model(adata, counts=counts)
 
         Args:
             params_g      : Beta (or DataFrame) with columns a_0, amp, phase
                             (and optionally disp for warm-start dispersion).
-            context_mode  : Must be "none" for inference on new data.
+            context_mode  : Leave at "none" (required for inference on new data).
             fix_phase     : Whether to fix acrophase parameters.
             noise_model   : "nb" or "poisson".
             fix_disp_val  : Dispersion mode (see __init__ docstring).
             log_amp_fn    : "logit" or "log".
-            device        : Torch device string.
+            device        : Torch device string. Resolved with
+                            :func:`scritmo.ml.utils.resolve_device`.
         """
         from scritmo import Beta
 
+        device = resolve_device(device)
         params_g = Beta(params_g)
         Ng = len(params_g)
 
         # minimal mp with a single dummy cell
         mp = {
             "params_g": params_g,
-            "context": np.array([1]),
+            "context": None,
             "counts": torch.ones(1, 1, dtype=torch.float32, device=device),
             "weights_g": None,
             "k_beta": None,
@@ -578,6 +617,10 @@ class Scritmo(
         elif metric == "mean_SE":
             self.mad = mean_SE(aligned_phases, true_phase, period=2 * np.pi)
             return self.mad
+        else:
+            raise ValueError(
+                f"Unknown metric '{metric}'. Use 'median_AE', 'mean_AE' or 'mean_SE'."
+            )
 
     def normalize_log_dist(self, ll_xc, method="simpson"):
         """
@@ -651,6 +694,10 @@ class Scritmo(
         elif self.log_amp_fn == "log":
             amp = torch.exp(self.log_amp)
             return amp
+        else:
+            raise ValueError(
+                f"Unknown log_amp_fn '{self.log_amp_fn}'. Use 'logit' or 'log'."
+            )
 
     def _get_ab(self):
         amp = self._amp_s()
@@ -661,8 +708,20 @@ class Scritmo(
 
     def get_parameter_dataframe_context(self, gene_names=None):
         """
-        Calls self.get_parameter_dataframe adds the context
-        dependent parts
+        LEGACY. Per-context gene parameters, one Beta table per context label.
+
+        Calls :meth:`get_parameter_dataframe` and folds in the context-dependent
+        parts: the intercept gains ``m_yg[i]`` and the harmonic coefficients and
+        amplitude are scaled by ``exp(log_lambda_y[i])``. Under the default
+        ``context_mode="none"`` those terms are frozen at their zero init, so every
+        returned table is identical to :meth:`get_parameter_dataframe`.
+
+        Args:
+            gene_names: Ignored (kept so older call sites keep working); the gene
+                names always come from the parameter table itself.
+
+        Returns:
+            dict mapping each label in ``self.context_u`` to a ``Beta`` table.
         """
         params_g = self.get_parameter_dataframe()
         gene_names = params_g.index.values
@@ -686,6 +745,7 @@ class Scritmo(
 
         Args:
             vec (list or np.array): The input vector of categories to encode.
+                None gives a single all-ones column, i.e. one global context.
             all_categories (list, optional): The complete list of all possible
                                              categories. If provided, the output
                                              matrix will have a column for each of
@@ -695,8 +755,8 @@ class Scritmo(
             torch.Tensor: The resulting one-hot encoded tensor.
         """
         if vec is None:
-            # Your original logic for when no vector is passed
-            return torch.ones((self.Nc, 1), dtype=torch.float32)
+            # no vector passed -> one global context
+            return torch.ones((self.Nc, 1), dtype=torch.float32, device=self.dev)
 
         # Reshape the input vector for the encoder
         data = np.array(vec).reshape(-1, 1)
@@ -746,6 +806,8 @@ class Scritmo(
 
         dm = self.dm[indices, :]
 
+        # m_yg / log_lambda_y are the legacy context terms; frozen at zero under
+        # context_mode="none", so these reduce to m_g and 1 respectively.
         intercept_cg = torch.matmul(dm, self.m_yg) + self.m_g
         lambda_cg = torch.matmul(dm, self.log_lambda_y.exp())
         disp = torch.exp(self.log_disp)
@@ -813,7 +875,12 @@ class Scritmo(
     ):
         """
         Wrapper around the simulate_cell_populations function.
+
+        ``context_col`` is the ``adata.obs`` column used to group samples; ``device``
+        is resolved with :func:`scritmo.ml.utils.resolve_device`, so the "cuda"
+        default falls back to CPU on a machine without a GPU.
         """
+        device = resolve_device(device)
         return simulate_cell_populations(
             cmodel=self,
             adata=adata,
@@ -850,7 +917,11 @@ class Scritmo(
         seed_sim: int | None = None,
         posterior_cell_chunk=None,
     ):
-        """Wrapper around the simulate_technical_grid function (harmonic σ_tech floor)."""
+        """Wrapper around the simulate_technical_grid function (harmonic σ_tech floor).
+
+        ``device`` is resolved with :func:`scritmo.ml.utils.resolve_device`.
+        """
+        device = resolve_device(device)
         return simulate_technical_grid(
             cmodel=self,
             adata=adata,
@@ -870,7 +941,7 @@ class Scritmo(
         self,
         adata: anndata.AnnData,
         ext_phase: None | np.ndarray = None,
-        context_col: None = None,
+        context_col: str | None = None,
         sample_col: str = "sample_name",
         ext_time_col: str = "ZTmod",
         post_estimator: str = "post_mode",
@@ -878,6 +949,19 @@ class Scritmo(
         other_obs_cols: list = [],
         allow_flip: bool = False,
     ):
+        """
+        One row per cell: the inferred phase and its posterior spread, joined to
+        the sample annotation.
+
+        Thin wrapper around :func:`scritmo.ml.analysis_utils.create_results_dataframe`.
+        Requires :meth:`get_inferred_phases` to have run (``warmup_and_train`` does
+        it). ``ext_phase`` is an optional reference phase per cell (radians) that
+        the posterior is aligned to; ``context_col``/``sample_col``/``ext_time_col``
+        are ``adata.obs`` columns carried into the frame for grouping.
+
+        Returns:
+            pandas.DataFrame, also the input to :func:`desync_results`.
+        """
         return create_results_dataframe(
             cmodel=self,
             adata=adata,
@@ -969,9 +1053,11 @@ class Scritmo(
             External (reference) phase per cell, in radians. If None, the cell
             posterior estimates are used as the external frame.
         context_col : str, optional
-            Column in ``adata.obs`` defining the context (e.g. condition/genotype).
-            If None, falls back to "context"; allowed to be None only when the model
-            has a single context (it is then auto-assigned).
+            Column in ``adata.obs`` used as the outer grouping level for the
+            desynchrony tables (e.g. celltype/condition/genotype). Unrelated to the
+            legacy ``context_mode`` model terms. If None, falls back to "context";
+            allowed to be None only when the model has a single context (it is then
+            auto-assigned).
         sample_col : str, default "sample_name"
             Column in ``adata.obs`` identifying the biological replicate/sample.
         ext_time_col : str, default "ZTmod"
@@ -986,7 +1072,9 @@ class Scritmo(
         period : float, default 24.0
             Circadian period, in hours.
         device : str, default "cuda"
-            Torch device for the simulation re-inference.
+            Torch device for the simulation re-inference. Resolved with
+            :func:`scritmo.ml.utils.resolve_device`, so the default falls back to
+            CPU on a machine without a GPU.
         n_epochs_training : int, default 0
             Re-training epochs on the simulated twin (0 = reuse current gene params).
         n_replicates_sim : int, optional
@@ -1069,6 +1157,8 @@ class Scritmo(
             real / technical dispersion columns). Also stores the intermediate
             real-data frame on ``self.result_df``.
         """
+
+        device = resolve_device(device)
 
         if sigma_tech_method not in ("simulation", "harmonic"):
             raise ValueError(
@@ -1202,7 +1292,25 @@ class Scritmo(
         return df_final
 
     def X_matrix(self, fixed_cell_mode, n_theta=None, mp=None):
+        """
+        Build the harmonic design matrix over the phase axis, and set ``Nx``.
 
+        Also sets ``self.fixed_cell_mode``, which the loss and the posterior
+        methods branch on.
+
+        Args:
+            fixed_cell_mode: If True, each cell has one known phase instead of a
+                grid: reads ``mp["fixed_cell_phases"]`` (shape [Nc]), registers it
+                as the ``phi_c`` buffer and sets ``Nx = 1``. ``mp`` is required in
+                this branch.
+            n_theta: Number of grid points on the circle. Defaults to ``self.Nx``.
+                Ignored in fixed-cell mode.
+            mp: The model-parameters dict; only read in fixed-cell mode.
+
+        Returns:
+            The design tensor, shape [Nx, Nc, 2*nh]. Also registers the ``phi_x``
+            (grid) or ``phi_c`` (fixed) phase buffer.
+        """
         if fixed_cell_mode:
             self.fixed_cell_mode = True
 
@@ -1238,7 +1346,7 @@ def compute_nb_params(
     E_xcg: torch.Tensor, disp: torch.Tensor, counts: torch.Tensor, eps: float = 1e-6
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    JIT-compiled Negative Binomial parameter computation.
+    Negative Binomial parameter computation (r, p) from the log-mean.
 
     Args:
         E_xcg: Expected mean values (before exp transform)
