@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import warnings
+from pathlib import Path
 from scritmo import Beta, optimal_shift, check_library_size_fallback
 import pandas as pd
 import json
@@ -331,7 +332,7 @@ def nmp(tensor):
 
 def get_ccg_pars(path=None):
     if path is None:
-        path = "/home/maxine/Documents/andrea/context_repo/data/params_g/ccg_zhang_context.csv"
+        path = Path(__file__).resolve().parents[3] / "ccg_zhang_context.csv"
     params_g = Beta(path)
     return params_g
 
