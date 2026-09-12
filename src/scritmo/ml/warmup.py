@@ -49,6 +49,9 @@ def warmup_and_train(
     weights_g=None,
     fixed_cell_phases=None,
     posterior_cell_chunk=None,
+    n_gamma=None,
+    gamma_range=(0.0, 2.0),
+    gamma_prior=None,
 ):
     """
     Fit the scRITMO model to an AnnData and infer a phase posterior per cell.
@@ -192,6 +195,17 @@ def warmup_and_train(
         Weight of a regularizer that penalizes a peaked marginal distribution of
         cells over the phase grid, i.e. encourages cells to spread around the
         circle. None or 0 disables it.
+    n_gamma, gamma_range, gamma_prior : optional
+        Per-cell amplitude scale ``gamma_c``, which multiplies every gene
+        amplitude of a cell: ``log(X_cg) = m_g + gamma_c * A_g cos(theta_c - phi_g)``.
+        ``n_gamma`` is the number of grid points gamma is marginalized over (None,
+        the default, disables the feature and recovers gamma == 1); the grid runs
+        over ``gamma_range``, with an optional ``gamma_prior``. Cost is
+        ``n_gamma``-fold: comfortable for bulk / pseudobulk, expensive for many
+        single cells. After inference the per-cell summaries live in
+        ``cmodel.gamma_mean_c`` / ``gamma_mode_c`` / ``gamma_std_c``, and the joint
+        (theta, gamma) posterior in ``cmodel.posterior_tgc``. See
+        :mod:`scritmo.ml.gamma`.
 
     Returns
     -------
@@ -293,6 +307,9 @@ def warmup_and_train(
         fix_disp_val=fix_disp_val,
         log_amp_fn=log_amp_fn,
         entropy_factor=entropy_factor,
+        n_gamma=n_gamma,
+        gamma_range=gamma_range,
+        gamma_prior=gamma_prior,
     )
     cmodel.to(device)
 

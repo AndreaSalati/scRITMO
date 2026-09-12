@@ -143,7 +143,13 @@ class MarginalizationMixin:
         \int P(D, beta, theta) P(theta) d theta = P(D, beta)
         The integration is done using Simpson's rule.
         Returns the log of the marginal distribution and the m
+
+        When the per-cell amplitude scale is enabled the leading axis is the
+        flattened (theta, gamma) grid, so the integral is the 2-D one and the
+        quadrature falls back to a plain sum (see
+        :meth:`scritmo.ml.gamma.GammaAmplitudeMixin.integration_method`).
         """
+        method = self.integration_method(method)
 
         # log (L(D|theta, beta) * P(theta))
         # ADD HERE ll_e_xc already summed over genes
@@ -187,6 +193,11 @@ class MarginalizationMixin:
 
         else:
             prior_xc = torch.log(torch.tensor(1 / (2 * torch.pi), dtype=torch.float32))
+
+        # the gamma axis rides along the same flattened grid, so its prior is just
+        # another additive term on that axis (a no-op when gamma is disabled)
+        if getattr(self, "gamma_mode", False):
+            prior_xc = prior_xc + self.log_gamma_prior().unsqueeze(1)
 
         return prior_xc
 

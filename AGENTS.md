@@ -155,6 +155,18 @@ Probabilistic modeling using JAX/NumPyro:
 - `model_null`: Null model for hypothesis testing
 - Supports GPU acceleration via `numpyro.set_platform("gpu")`
 
+### Per-cell amplitude scale (`ml/gamma.py`)
+Optional latent `gamma_c` that rescales every gene amplitude of a cell:
+`log(X_cg) = m_g + gamma_c * A_g * cos(theta_c - phi_g)`. Like the phase it is
+marginalized on a grid, not fit; the (theta, gamma) grid is flattened onto the
+existing phase axis (`Nx = n_theta * n_gamma`), since the mean is linear in the
+harmonic design row. Enabled with `n_gamma=` on `warmup_and_train` / `Scritmo`;
+`None` (default) is a no-op and reproduces the original model exactly. Results
+land in `cmodel.gamma_mean_c`, `gamma_mode_c`, `gamma_std_c` and the joint
+`cmodel.posterior_tgc`; `plot_gamma_posterior()` inspects one cell. Only the
+RELATIVE gamma between cells is identified unless a `gamma_prior` pins the
+global gamma / A_g scale. Not supported with `unspliced_mode` or fixed-cell mode.
+
 ### CHIRAL (`pychiral/`)
 Phase inference algorithm combining:
 - Spin glass initialization (mean field)

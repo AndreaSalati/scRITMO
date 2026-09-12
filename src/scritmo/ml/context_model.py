@@ -46,6 +46,7 @@ from .analysis_utils import (
 from .genome_fit import GenomeFitMixin
 from .desync_mixin import DesynchronyMixin
 from .null_model import NullModelMixin
+from .gamma import GammaAmplitudeMixin
 
 circSTD = partial(cSTD, adjust=True)
 
@@ -59,6 +60,7 @@ class Scritmo(
     FisherUncertaintyMixin,
     GenomeFitMixin,
     NullModelMixin,
+    GammaAmplitudeMixin,
 ):
     """
     scRITMO circadian phase-inference model for single-cell RNA-seq.
@@ -80,6 +82,8 @@ class Scritmo(
       - ``FisherUncertaintyMixin``— Fisher/Cramér–Rao per-cell phase uncertainty.
       - ``GenomeFitMixin``        — genome-wide gene refitting at fixed phases.
       - ``NullModelMixin``        — flat-amplitude null NB fit for comparison.
+      - ``GammaAmplitudeMixin``   — optional per-cell amplitude scale, also
+        marginalized (off by default; see ``n_gamma``).
 
     Optional features (selected via the ``mp`` dict): a soft Von-Mises prior on
     the acrophases (``k_beta``), an acrophase initialization decoupled from that
@@ -123,6 +127,9 @@ class Scritmo(
         log_amp_fn="logit",
         method="simpson",
         entropy_factor=None,
+        n_gamma=None,
+        gamma_range=(0.0, 2.0),
+        gamma_prior=None,
     ):
         """
         Initialize the Scritmo model from an assembled parameter/data bundle.
@@ -173,10 +180,27 @@ class Scritmo(
                 penalizes a peaked marginal distribution of cells over the phase grid,
                 encouraging cells to spread around the circle (analogous to CoPhaser's
                 circular entropy term). None or 0 disables it.
+            n_gamma: Number of grid points for the per-cell amplitude scale
+                ``gamma_c``, which multiplies every gene amplitude of that cell:
+                ``log(X_cg) = m_g + gamma_c * A_g * cos(theta_c - phi_g)``. Like the
+                phase, gamma is marginalized, not fit; the (theta, gamma) grid is
+                flattened onto the phase axis, so ``Nx = n_theta * n_gamma``.
+                None (default) or 1 disables it and the model is exactly the
+                original one (gamma == 1). See :mod:`scritmo.ml.gamma`.
+            gamma_range: ``(lo, hi)`` bounds of the gamma grid, inclusive. Only
+                used when ``n_gamma`` is set. Negative values are rejected:
+                gamma < 0 is redundant with a phase shift of pi.
+            gamma_prior: Prior on gamma. None/"uniform" is flat on the grid; a
+                float is a Gaussian of that std centered on 1; a ``(mu, sigma)``
+                tuple or a callable are also accepted. A prior is what pins the
+                global ``gamma`` / ``A_g`` scale degeneracy.
         """
         super().__init__()
 
         self.Nx, self.Nc, self.Ng = y.shape
+        # number of points on the circle; Nx is the FULL grid, which also carries
+        # the gamma axis when it is enabled (Nx = n_theta * n_gamma).
+        self.n_theta = self.Nx
         self.nh = mp["params_g"].num_harmonics()
         self.dev = y.device
 
@@ -206,6 +230,18 @@ class Scritmo(
             fixed_cell_mode = True
         else:
             fixed_cell_mode = False
+
+        # per-cell amplitude scale (off by default). Must precede X_matrix, which
+        # builds the flattened (theta, gamma) grid.
+        if fixed_cell_mode and n_gamma is not None and int(n_gamma) > 1:
+            raise NotImplementedError(
+                "gamma amplitude scaling is not available in fixed-cell-phase mode."
+            )
+        self._setup_gamma(
+            n_gamma=n_gamma, gamma_range=gamma_range, gamma_prior=gamma_prior
+        )
+        # Simpson's rule is meaningless on the flattened grid, see the mixin
+        self.method = self.integration_method(self.method)
 
         X = self.X_matrix(mp=mp, fixed_cell_mode=fixed_cell_mode)
         self.register_buffer("X", X)
@@ -330,6 +366,9 @@ class Scritmo(
         fix_disp_val="gene",
         log_amp_fn="logit",
         device="cpu",
+        n_gamma=None,
+        gamma_range=(0.0, 2.0),
+        gamma_prior=None,
     ):
         """
         Initialize a Scritmo model from gene parameters only, without adata.
@@ -359,6 +398,8 @@ class Scritmo(
             log_amp_fn    : "logit" or "log".
             device        : Torch device string. Resolved with
                             :func:`scritmo.ml.utils.resolve_device`.
+            n_gamma, gamma_range, gamma_prior : per-cell amplitude scale, see
+                            :meth:`__init__`. Off by default.
         """
         from scritmo import Beta
 
@@ -387,6 +428,9 @@ class Scritmo(
             noise_model=noise_model,
             fix_disp_val=fix_disp_val,
             log_amp_fn=log_amp_fn,
+            n_gamma=n_gamma,
+            gamma_range=gamma_range,
+            gamma_prior=gamma_prior,
         )
 
     def forward(self, y, indices=slice(None), y_u=None, **kwargs):
@@ -395,6 +439,10 @@ class Scritmo(
         the data y is already been batched. But the indices are still
         needed for the celltypes.
         """
+
+        # in gamma mode the grid axis is longer than the data's (theta-only) one;
+        # the data does not depend on the grid, so this is a view, not a copy.
+        y = self.expand_to_grid(y, self.Nx)
 
         dist = self.nb_dist(indices=indices)
         ll_xcg = dist.log_prob(y)
@@ -471,13 +519,23 @@ class Scritmo(
         counts=None,
         n_theta=None,
         cell_chunk=None,
+        joint=False,
     ):
         """
         It gives you the posterior distribution of the phase
         for each cell given the fitted model parameters and data
 
+        With the per-cell amplitude scale enabled, the posterior is computed on
+        the joint (theta, gamma) grid and then gamma is summed out, so the
+        return value is still a phase posterior of shape ``(n_theta, Nc)``. The
+        full joint, shape ``(n_theta, n_gamma, Nc)``, is always stored in
+        ``self.posterior_tgc`` and is returned instead when ``joint=True``.
+
         Args:
             y: Data tensor
+            joint: return the full (theta, gamma) posterior, flattened to
+                ``(n_theta * n_gamma, Nc)``, instead of the phase marginal.
+                Ignored when gamma is disabled.
             cell_chunk: if not None, process cells in chunks of this size to
                 bound peak GPU memory. The full-population log-likelihood tensor
                 scales as (n_theta, Nc, Ng); for large cell types this exceeds
@@ -502,13 +560,11 @@ class Scritmo(
                     "Counts must be provided when evaluating on new cells."
                 )
             else:
-                # adjust the Nc dependent parameters, first X
-                phi_x_tensor = torch.linspace(
-                    0, 2 * torch.pi, n_theta + 1, dtype=torch.float32
-                )[:-1]
-                X_tensor = harmonic_dm_torch(phi_x_tensor, self.nh, False)
-                X_tensor = X_tensor.unsqueeze(1).expand(n_theta, self.Nc, self.nh * 2)
-                self.register_buffer("X", X_tensor)
+                # adjust the Nc dependent parameters, first X (X_matrix also
+                # rebuilds the phase/gamma grid buffers and resets self.Nx)
+                self.register_buffer(
+                    "X", self.X_matrix(fixed_cell_mode=False, n_theta=n_theta)
+                )
                 # adjust dm
                 self.register_buffer("dm", self.design_matrix(np.ones(self.Nc)))
 
@@ -524,17 +580,13 @@ class Scritmo(
                 c1 = min(c0 + cell_chunk, Nc_total)
                 idx = slice(c0, c1)
 
-                # build the (n_theta, chunk, Ng) data slice for this chunk
-                if n_theta is not None:
-                    y_c = y[0, idx, :].unsqueeze(0).repeat(n_theta, 1, 1)
-                    y_u_c = (
-                        y_u[0, idx, :].unsqueeze(0).repeat(n_theta, 1, 1)
-                        if y_u is not None
-                        else None
-                    )
-                else:
-                    y_c = y[:, idx, :]
-                    y_u_c = y_u[:, idx, :] if y_u is not None else None
+                # build the (n_grid, chunk, Ng) data slice for this chunk. n_grid
+                # is n_theta, or n_theta * n_gamma when the gamma axis is on.
+                n_grid = self.grid_size(n_theta)
+                y_c = self.expand_to_grid(y, n_grid, idx)
+                y_u_c = (
+                    self.expand_to_grid(y_u, n_grid, idx) if y_u is not None else None
+                )
                 counts_c = counts[idx] if counts is not None else None
 
                 dist = self.nb_dist(indices=idx, counts=counts_c, n_theta=n_theta)
@@ -551,6 +603,13 @@ class Scritmo(
                     ll_xcg = ll_xcg + dist_u.log_prob(y_u_c)
 
                 log_posterior_xc = (ll_xcg * self.weights_g).sum(2)  # + log_prior_xc
+                if self.gamma_mode:
+                    # the phase prior stays flat here (as it has always been), but
+                    # the gamma prior is part of the model and must be applied
+                    _, gamma_x = self.grid_axes(n_grid // self.n_gamma)
+                    log_posterior_xc = log_posterior_xc + self.log_gamma_prior(
+                        gamma_x.to(log_posterior_xc.device)
+                    ).unsqueeze(1)
                 log_mle_c = log_posterior_xc.max(0).values
                 posterior_xc = self.normalize_log_dist(log_posterior_xc, method=method)
 
@@ -559,6 +618,21 @@ class Scritmo(
 
         posterior_xc = np.concatenate(post_chunks, axis=1)
         log_mle_c = np.concatenate(lmle_chunks, axis=0)
+
+        if self.gamma_mode:
+            # split the flattened grid back into its two axes and keep the joint.
+            # posterior_tgc is stored as a plain probability array (sums to 1 over
+            # the two grid axes), which is what one wants for plotting and moments.
+            P_tgc = self.split_gamma_grid(posterior_xc)
+            self.posterior_tgc = P_tgc / P_tgc.sum(axis=(0, 1), keepdims=True)
+            if not joint:
+                # marginalize gamma out: everything downstream expects a phase
+                # posterior on a plain circular grid, in the same density
+                # convention as the gamma-free model (see normalize_log_dist)
+                n_theta_eff = self.posterior_tgc.shape[0]
+                posterior_xc = self.posterior_tgc.sum(axis=1)
+                posterior_xc = posterior_xc / posterior_xc.sum(axis=0, keepdims=True)
+                posterior_xc = posterior_xc * n_theta_eff / (2 * np.pi)
 
         if return_all:
             # with a flat phase prior l_xc is identical to posterior_xc; prior_xc
@@ -596,6 +670,17 @@ class Scritmo(
         self.post_mode_c = compute_posterior_mode(posterior_xc)
         # self.posterior_xc = posterior_xc  # full (Nx, Nc) posterior array
 
+        if self.gamma_mode:
+            # per-cell amplitude scale: marginal, its moments, and the boundary
+            # diagnostic (how much mass is pinned at the edges of the grid)
+            (
+                self.gamma_post_gc,
+                self.gamma_mean_c,
+                self.gamma_std_c,
+                self.gamma_mode_c,
+            ) = self.gamma_posterior_statistics(self.posterior_tgc)
+            self.gamma_edge_lo_c, self.gamma_edge_hi_c = self.gamma_boundary_mass()
+
         return post_mean_c
 
     def compute_mad(self, true_phase, estimator="mode", metric="median_AE"):
@@ -627,7 +712,11 @@ class Scritmo(
         this method gets a log likelihood with format
         xc (where x is the phase and c the cell index)
         and it normalizes w.r.t. the x variable
+
+        In gamma mode x runs over the flattened (theta, gamma) grid, so the
+        result is the normalized JOINT posterior over both.
         """
+        method = self.integration_method(method)
         max_c = torch.max(ll_xc, dim=0, keepdim=True).values
         # numerical stability
         ll_xc = ll_xc - max_c
@@ -636,7 +725,11 @@ class Scritmo(
         if method == "simpson":
             l_c = self.vectorized_simpson(l_xc, self.phi_x)
         elif method == "sum":
-            l_c = torch.sum(l_xc, dim=0) * (2 * torch.pi / self.Nx)
+            # use the actual grid size, which can differ from self.Nx when the
+            # posterior is evaluated on a finer grid than the training one
+            # (a 0-dim input is the flat-prior case, which has no grid axis)
+            n_grid = l_xc.shape[0] if l_xc.dim() > 0 else self.Nx
+            l_c = torch.sum(l_xc, dim=0) * (2 * torch.pi / n_grid)
 
         return l_xc / l_c
 
@@ -795,11 +888,15 @@ class Scritmo(
             counts = self.counts[indices]
 
         if n_theta is not None:
-            phi_x_new = torch.linspace(
-                0, 2 * torch.pi, n_theta + 1, dtype=torch.float32, device=self.dev
-            )[:-1]
+            phi_x_new, gamma_x_new = self.grid_axes(n_theta)
+            phi_x_new = phi_x_new.to(self.dev)
+            gamma_x_new = (
+                gamma_x_new.to(self.dev) if gamma_x_new is not None else None
+            )
             X_new = harmonic_dm_torch(phi_x_new, self.nh, False)
-            X = X_new.unsqueeze(1).expand(n_theta, self.Nc, self.nh * 2)
+            X_new = self.scale_design(X_new, gamma_x_new)
+            n_grid = X_new.shape[0]
+            X = X_new.unsqueeze(1).expand(n_grid, self.Nc, self.nh * 2)
             X = X[:, indices, :]
         else:
             X = self.X[:, indices, :]
@@ -1328,17 +1425,22 @@ class Scritmo(
 
         else:
             if n_theta is None:
-                n_theta = self.Nx
+                n_theta = self.n_theta
             self.fixed_cell_mode = False
-            # EXISTING LOGIC
-            phi_x_tensor = torch.linspace(
-                0, 2 * torch.pi, n_theta + 1, dtype=torch.float32
-            )[:-1]
+            self.n_theta = n_theta
+
+            # phase grid, flattened together with the gamma axis when enabled
+            # (gamma_x is None otherwise, and everything below is the old logic)
+            phi_x_tensor, gamma_x_tensor = self.grid_axes(n_theta)
             self.register_buffer("phi_x", phi_x_tensor)
+            if gamma_x_tensor is not None:
+                self.register_buffer("gamma_x", gamma_x_tensor)
+            self.Nx = phi_x_tensor.shape[0]
 
             # Nx Np -> Nx Nc Np
             X_tensor = harmonic_dm_torch(phi_x_tensor, self.nh, False)
-            X_tensor = X_tensor.unsqueeze(1).expand(n_theta, self.Nc, self.nh * 2)
+            X_tensor = self.scale_design(X_tensor, gamma_x_tensor)
+            X_tensor = X_tensor.unsqueeze(1).expand(self.Nx, self.Nc, self.nh * 2)
             return X_tensor
 
 
