@@ -428,8 +428,6 @@ class Beta(pd.DataFrame):
         """
         Rotate the beta values by a given phase.
         """
-        rot = np.array([[np.cos(phi), -np.sin(phi)], [np.sin(phi), np.cos(phi)]])
-
         # assumes that the columns are ordered as "a_0", "a_1", "b_1", "a_2", "b_2", etc
         # check the order of the columns
         nh = self.num_harmonics()
@@ -446,10 +444,17 @@ class Beta(pd.DataFrame):
                 )
 
         for i in range(nh):
+            # harmonic k oscillates k times faster, so it rotates by k * phi
+            k = i + 1
+            rot = np.array(
+                [
+                    [np.cos(k * phi), -np.sin(k * phi)],
+                    [np.sin(k * phi), np.cos(k * phi)],
+                ]
+            )
             self.iloc[:, 2 * i + 1 : 2 * i + 3] = (
                 self.iloc[:, 2 * i + 1 : 2 * i + 3].values @ rot.T
             )
-            rot = rot @ rot
 
         # Update phi_peak column if present
         if "phase" in self.columns:
