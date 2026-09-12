@@ -18,6 +18,7 @@ def warmup_and_train(
     context=None,
     context_mode="none",
     fix_phase=False,
+    fix_amp=False,
     k_beta=0.2,
     noise_model="nb",
     fix_disp_val="gene",
@@ -122,6 +123,10 @@ def warmup_and_train(
         AnnData layer to fit. None uses ``adata.X``.
     fix_phase : bool, default False
         If True the acrophases are buffers, not parameters: fixed, not trained.
+    fix_amp : bool, default False
+        If True the gene amplitudes are not trained either. With
+        ``fix_phase=True`` this pins the whole rhythm template to ``params_g``,
+        which is what turns ``n_gamma``'s per-cell scale into an absolute one.
     k_beta : float or None, default 0.2
         Concentration of the soft Von-Mises prior pulling each acrophase toward
         ``params_g["phase"]``. None disables the prior entirely (see the regime
@@ -303,6 +308,7 @@ def warmup_and_train(
         data_c,
         context_mode=context_mode,
         fix_phase=fix_phase,
+        fix_amp=fix_amp,
         noise_model=noise_model,
         fix_disp_val=fix_disp_val,
         log_amp_fn=log_amp_fn,

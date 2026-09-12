@@ -122,6 +122,7 @@ class Scritmo(
         y,
         context_mode="none",
         fix_phase=False,
+        fix_amp=False,
         noise_model="nb",
         fix_disp_val="gene",
         log_amp_fn="logit",
@@ -165,6 +166,14 @@ class Scritmo(
                 "intercept", "lambda", "full", "full_lambda", "context_only".
                 See :func:`scritmo.ml.utils.set_context_mode`.
             fix_phase: If True, acrophase parameters are fixed (not trained)
+            fix_amp: If True, the gene amplitudes are fixed (not trained) at their
+                ``params_g["amp"]`` values. Pair it with ``fix_phase=True`` to pin the
+                whole rhythm template, which is what makes the per-cell ``gamma_c``
+                (see ``n_gamma``) an ABSOLUTE amplitude scale relative to that
+                template instead of a scale known only up to a global factor.
+                Note the ``log_amp_fn="logit"`` parameterization floors amplitudes
+                at 1e-2, so amplitudes below that are held at the floor, not at
+                their input value.
             noise_model: "nb" for Negative Binomial, "poisson" for Poisson
             fix_disp_val: Controls dispersion initialization and shape.
                 - "gene": Per-gene dispersion (Ng,), trainable. If params_g has a "disp"
@@ -354,6 +363,11 @@ class Scritmo(
         self.set_context_mode(context_mode)
         self.context_mode = context_mode
 
+        # applied last: set_context_mode also touches log_amp in some modes
+        self.fix_amp = fix_amp
+        if fix_amp:
+            self.log_amp.requires_grad = False
+
     set_context_mode = set_context_mode
 
     @classmethod
@@ -362,6 +376,7 @@ class Scritmo(
         params_g,
         context_mode="none",
         fix_phase=False,
+        fix_amp=False,
         noise_model="nb",
         fix_disp_val="gene",
         log_amp_fn="logit",
@@ -393,6 +408,7 @@ class Scritmo(
                             (and optionally disp for warm-start dispersion).
             context_mode  : Leave at "none" (required for inference on new data).
             fix_phase     : Whether to fix acrophase parameters.
+            fix_amp       : Whether to fix the gene amplitudes.
             noise_model   : "nb" or "poisson".
             fix_disp_val  : Dispersion mode (see __init__ docstring).
             log_amp_fn    : "logit" or "log".
@@ -425,6 +441,7 @@ class Scritmo(
             y_dummy,
             context_mode=context_mode,
             fix_phase=fix_phase,
+            fix_amp=fix_amp,
             noise_model=noise_model,
             fix_disp_val=fix_disp_val,
             log_amp_fn=log_amp_fn,
