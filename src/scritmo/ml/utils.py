@@ -79,7 +79,8 @@ def circ_std_P(P):
     # weighted mean resultant vector
     R = torch.sum(P * e_iphi)
 
-    std = torch.sqrt(-2 * torch.log(torch.abs(R)))
+    # clipped: see the note in scritmo.circular.circular.circ_std_P
+    std = torch.sqrt((-2 * torch.log(torch.abs(R).clamp(max=1.0))).clamp(min=0.0))
     return std
 
 

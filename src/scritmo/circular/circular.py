@@ -198,5 +198,9 @@ def circ_var_P(P):
 def circ_std_P(P):
 
     phis = np.linspace(0, 2 * np.pi, P.shape[0] + 1)[:-1]
-    std = np.sqrt(-2 * np.log(np.abs(np.sum(np.exp(1j * phis) * P))))
+    # R <= 1 exactly for a normalized P, but float rounding can push a very
+    # concentrated posterior a hair above 1, which would make the log positive
+    # and the sqrt return NaN. Clip so a spike gives std 0, not NaN.
+    R = np.clip(np.abs(np.sum(np.exp(1j * phis) * P)), 0.0, 1.0)
+    std = np.sqrt(np.maximum(-2 * np.log(R), 0.0))
     return std
