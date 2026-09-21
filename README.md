@@ -8,12 +8,13 @@
     <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-≥3.11-blue.svg" alt="Python"></a>
     <a href="https://pytorch.org/"><img src="https://img.shields.io/badge/PyTorch-≥2.0-ee4c2c.svg" alt="PyTorch"></a>
     <a href="#license"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
+    <a href="https://www.biorxiv.org/content/10.64898/2026.03.30.715278v1.full"><img src="https://img.shields.io/badge/bioRxiv-preprint-b31b1b.svg" alt="bioRxiv preprint"></a>
   </p>
 </p>
 
 ---
 
-**scRITMO** is an unsupervised probabilistic framework for inferring circadian phases from single-cell RNA-seq data and quantifying biological desynchrony at the population level.
+**scRITMO** is an unsupervised probabilistic framework for inferring circadian phases from single-cell RNA-seq data and quantifying biological desynchrony at the population level, described in our preprint: [*Inferring circadian phases and quantifying biological desynchrony across single-cell transcriptomes*](https://www.biorxiv.org/content/10.64898/2026.03.30.715278v1.full) (bioRxiv, 2026).
 
 Unlike methods that only provide point estimates, scRITMO computes a **full posterior phase distribution** for each cell — yielding both a phase estimate and a principled measure of uncertainty. It further enables the **separation of biological phase dispersion from technical noise** through simulation-calibrated variance decomposition.
 
@@ -66,3 +67,18 @@ pip install -e .
 - Python >= 3.11
 - PyTorch (installed by default, needed for the `scritmo.ml` module)
 - See `pyproject.toml` for the full dependency list
+
+## Citation
+
+If you use scRITMO in your work, please cite:
+
+```bibtex
+@article{scritmo2026,
+  title   = {Inferring circadian phases and quantifying biological desynchrony across single-cell transcriptomes},
+  author  = {Salati, Andrea and others},
+  journal = {bioRxiv},
+  year    = {2026},
+  doi     = {10.64898/2026.03.30.715278},
+  url     = {https://www.biorxiv.org/content/10.64898/2026.03.30.715278v1.full}
+}
+```
