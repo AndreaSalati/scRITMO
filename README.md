@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="branding/logos/logo-6-rose-membrane.svg" alt="scRITMO logo" width="140" height="140">
+  <img src="logo.svg" alt="scRITMO logo" width="140" height="140">
   <h1 align="center">scRITMO</h1>
   <p align="center">
     <strong>Single-cell circadian phase inference and desynchrony quantification</strong>

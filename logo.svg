@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <title>scRITMO — Desynchrony Rose in a Cell Membrane</title>
+  <defs>
+    <linearGradient id="petalGrad6" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f2994a"/>
+      <stop offset="100%" stop-color="#7b4fa0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- scalloped cell membrane, drawn as a ring of overlapping bumps -->
+  <g fill="none" stroke="#c9c3e6" stroke-width="2">
+    <path d="
+      M 100 12
+      C 116 12 116 26 132 27
+      C 148 28 150 14 164 20
+      C 178 26 172 40 184 50
+      C 196 60 188 72 194 88
+      C 200 104 186 108 188 124
+      C 190 140 176 140 172 154
+      C 168 168 154 164 144 176
+      C 134 188 122 178 106 184
+      C 90 190 84 176 68 178
+      C 52 180 50 166 36 160
+      C 22 154 26 140 16 130
+      C 6 120 16 108 12 92
+      C 8 76 22 74 22 58
+      C 22 42 36 44 46 32
+      C 56 20 66 30 80 20
+      C 90 13 96 12 100 12 Z"/>
+  </g>
+
+  <!-- desynchrony rose -->
+  <g fill="url(#petalGrad6)" opacity="0.92">
+    <path d="M100,100 L100,42 A58,58 0 0,1 115,44.9 Z"/>
+    <path d="M100,100 L115,44.9 A58,58 0 0,1 128,52.3 Z"/>
+    <path d="M100,100 L128,52.3 A58,58 0 0,1 138,62.4 Z" opacity="0.55"/>
+    <path d="M100,100 L138,62.4 A58,58 0 0,1 144,75.2 Z" opacity="0.35"/>
+    <path d="M100,100 L144,75.2 A58,58 0 0,1 146,89.5 Z" opacity="0.22"/>
+    <path d="M100,100 L146,89.5 A58,58 0 0,1 144,103.9 Z" opacity="0.22"/>
+    <path d="M100,100 L144,103.9 A58,58 0 0,1 137,117 Z" opacity="0.35"/>
+    <path d="M100,100 L137,117 A58,58 0 0,1 125,127.3 Z" opacity="0.55"/>
+    <path d="M100,100 L125,127.3 A58,58 0 0,1 100,132 Z"/>
+  </g>
+
+  <!-- nucleus -->
+  <circle cx="100" cy="100" r="8" fill="#2c2a6b"/>
+</svg>
