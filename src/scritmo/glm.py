@@ -155,6 +155,41 @@ def _fit_single_gene_glm(
         return result_dict
 
 
+def _disp_mom(params_g, X, data_c, genes, counts):
+    """
+    Method-of-moments negative-binomial dispersion, per gene, from the
+    residuals of that gene's own fitted rhythm.
+
+    mu_cg   = counts_cg * exp(sum_k X_ck beta_kg)      (all fitted coefficients)
+    alpha_g = sum_c[(y_cg - mu_cg)^2 - mu_cg] / sum_c[mu_cg^2],  clipped at 1e-3
+
+    Uses ALL cells: unlike the GLM fit, no outlier trimming is applied here.
+    Genes with sum_c[mu_cg^2] == 0 get NaN.
+    """
+    coef_cols = [c for c in X.columns if c in params_g.columns]
+    pos = {}
+    for i, g in enumerate(genes):
+        pos.setdefault(g, i)
+    cols = [pos[g] for g in params_g.index]
+
+    Y = np.asarray(data_c[:, cols], dtype=float)
+    B = params_g[coef_cols].to_numpy(dtype=float)
+    # (n_cells, n_coef) @ (n_coef, n_genes) -> (n_cells, n_genes)
+    mu = np.exp(X[coef_cols].to_numpy(dtype=float) @ B.T)
+    if isinstance(counts, pd.DataFrame):
+        mu *= counts[list(params_g.index)].to_numpy(dtype=float)
+    else:
+        mu *= np.asarray(counts, dtype=float).reshape(-1, 1)
+
+    num = ((Y - mu) ** 2 - mu).sum(0)
+    den = (mu**2).sum(0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        alpha = num / den
+    alpha = np.where(den == 0, np.nan, alpha)
+    alpha = np.clip(alpha, 1e-3, None)
+    return pd.Series(alpha, index=params_g.index, name="disp_MoM")
+
+
 def glm_gene_fit(
     data,
     phases,
@@ -172,6 +207,7 @@ def glm_gene_fit(
     noise_model="nb",
     show_warnings=False,  # New parameter for the switch
     add_slope=False,
+    disp_mom=True,
 ):
     """
     Fits gene expression data to a harmonic model using statsmodels.
@@ -188,8 +224,12 @@ def glm_gene_fit(
     counts : array-like, optional
         Total counts per cell/sample for offset. If None, computed from data.
         In case of bulk, can be a DataFrame with genes as columns.
-    fixed_disp : float, default=0.1
-        Fixed dispersion value if fit_disp is False.
+    fixed_disp : float or array-like or pandas.Series, default=0.1
+        Fixed dispersion value if fit_disp is False. Either a scalar used for
+        every gene, or one value per gene: a numpy array / list aligned
+        positionally with the final `genes` list, or a pandas Series indexed by
+        gene name (aligned by name; genes missing from the Series fall back to
+        0.1, and the number of fallbacks is printed).
     fit_disp : bool, default=False
         If True, fits the dispersion parameter for each gene.
     layer : str, default="spliced"
@@ -206,6 +246,13 @@ def glm_gene_fit(
         Number of parallel jobs. -1 uses all available cores. 1 runs in serial.
     pseudobulk_by : list of str or None, default=None
         If provided, pseudobulks the data by these obs keys before fitting.
+    disp_mom : bool, default=True
+        If True, adds a 'disp_MoM' column: the method-of-moments
+        negative-binomial dispersion of each gene, computed from the residuals
+        of its own fitted rhythm over ALL cells (no outlier trimming, unlike
+        the fit itself). It builds a (n_cells, n_genes) mu array, which roughly
+        doubles the peak memory of the call - that is why it can be switched
+        off.
     """
     if pseudobulk_by:
         data = pseudobulk(
@@ -245,6 +292,28 @@ def glm_gene_fit(
     )
     X_null = create_harmonic_design_matrix(phases.squeeze(), 0, add_slope=add_slope)
 
+    # --- fixed_disp: one scalar for the call, or one value per gene ---
+    disp_per_gene = None
+    if isinstance(fixed_disp, pd.Series):
+        aligned = fixed_disp.reindex(genes).astype(float)
+        n_missing = int(aligned.isna().sum())
+        if n_missing:
+            print(
+                f"fixed_disp: {n_missing} of {len(genes)} genes are missing from the "
+                "Series, falling back to the default 0.1 for them."
+            )
+        disp_per_gene = aligned.fillna(0.1).values
+    elif isinstance(fixed_disp, (list, tuple, np.ndarray)):
+        disp_per_gene = np.asarray(fixed_disp, dtype=float)
+        if disp_per_gene.ndim == 0:  # 0-d array, i.e. a scalar
+            fixed_disp = float(disp_per_gene)
+            disp_per_gene = None
+        elif len(disp_per_gene) != len(genes):
+            raise ValueError(
+                f"'fixed_disp' has {len(disp_per_gene)} values but there are "
+                f"{len(genes)} genes to fit."
+            )
+
     # --- Create the "slim" partial function ---
     # Pre-fill all arguments that are the same for every gene
     fit_function = partial(
@@ -252,20 +321,31 @@ def glm_gene_fit(
         X=X,
         X_null=X_null,
         # counts_=counts,
-        fixed_disp=fixed_disp,
         fit_disp=fit_disp,
         outlier_threshold=outlier_threshold,
         n_harmonics=n_harmonics,
         noise_model=noise_model,
         show_warnings=show_warnings,
     )
+    if disp_per_gene is None:
+        # really constant across genes, so it belongs in the partial
+        fit_function = partial(fit_function, fixed_disp=fixed_disp)
+
+    def _disp_kw(i):
+        # empty when fixed_disp is already baked into the partial
+        return {} if disp_per_gene is None else {"fixed_disp": float(disp_per_gene[i])}
 
     # --- Dispatch to serial or parallel execution ---
     if n_jobs == 1:
         print("Running in serial mode.")
 
         results_list = [
-            fit_function(gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts)
+            fit_function(
+                gene_name=genes[i],
+                gene_counts=data_c[:, i],
+                counts_=counts,
+                **_disp_kw(i),
+            )
             for i in tqdm(range(len(genes)), desc="Fitting genes (serial)")
         ]
 
@@ -274,7 +354,10 @@ def glm_gene_fit(
 
         results_list = Parallel(n_jobs=n_jobs)(
             delayed(fit_function)(
-                gene_name=genes[i], gene_counts=data_c[:, i], counts_=counts
+                gene_name=genes[i],
+                gene_counts=data_c[:, i],
+                counts_=counts,
+                **_disp_kw(i),
             )
             for i in tqdm(range(len(genes)), desc="Fitting genes (parallel)")
         )
@@ -288,6 +371,13 @@ def glm_gene_fit(
     params_g = pd.DataFrame(results_list).set_index("gene")
     # remove all columns with NaN a_0
     params_g = params_g.dropna(subset=["a_0"])
+
+    if disp_mom:
+        disp_mom_g = _disp_mom(params_g, X, data_c, genes, counts)
+        cols = list(params_g.columns)
+        cols.insert(cols.index("disp") + 1, "disp_MoM")
+        params_g["disp_MoM"] = disp_mom_g
+        params_g = params_g[cols]
 
     params_g["pvalue_correctedBH"] = benjamini_hochberg_correction(
         params_g["pvalue"].values
