@@ -43,8 +43,6 @@ The `ContextModel` is the central class. It implements:
 
 ## Installation
 
-### Basic Installation (core dependencies only)
-
 ```bash
 # Clone the repository
 git clone https://github.com/AndreaSalati/scRITMO.git
@@ -54,32 +52,12 @@ cd scRITMO
 conda create -n scritmo-env python=3.11 -y
 conda activate scritmo-env
 
-# Install the package
+# Install the package (PyTorch included by default)
 pip install -e .
-```
-
-### Installation with ML extras (includes PyTorch)
-
-For full functionality including the `scritmo.ml` module:
-
-```bash
-# Clone the repository
-git clone https://github.com/AndreaSalati/scRITMO.git
-cd scRITMO
-
-# Create a conda environment with Python 3.11
-conda create -n scritmo-env python=3.11 -y
-conda activate scritmo-env
-
-# Install the package with ML extras
-pip install -e ".[ml]"
 ```
 
 ## Requirements
 
 - Python >= 3.11
-- See `pyproject.toml` for full dependency list
-
-### Optional Dependencies
-
-- `[ml]` extras include: `torch>=2.0.0`, `torchvision>=0.15.0`
+- PyTorch (installed by default, needed for the `scritmo.ml` module)
+- See `pyproject.toml` for the full dependency list
