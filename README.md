@@ -68,6 +68,11 @@ pip install -e .
 - PyTorch (installed by default, needed for the `scritmo.ml` module)
 - See `pyproject.toml` for the full dependency list
 
+## Tutorials
+
+- [`tutorials/tutorial_inference.ipynb`](tutorials/tutorial_inference.ipynb) — full walkthrough on a synchronized (known-ZT) dataset: phase inference, gene-level parameter shifts, and desynchrony quantification.
+- [`tutorials/tutorial_unsynchronized_cells.ipynb`](tutorials/tutorial_unsynchronized_cells.ipynb) — downloads the FLASH-seq 3T3 dataset from the paper directly from GEO ([GSE325045](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE325045)) and runs inference on freely-cycling, unsynchronized cells with no external time label.
+
 ## Citation
 
 If you use scRITMO in your work, please cite:
