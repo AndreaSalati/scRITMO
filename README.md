@@ -72,6 +72,7 @@ pip install -e .
 
 - [`tutorials/tutorial_inference.ipynb`](tutorials/tutorial_inference.ipynb) — full walkthrough on a synchronized (known-ZT) dataset: phase inference, gene-level parameter shifts, and desynchrony quantification.
 - [`tutorials/tutorial_unsynchronized_cells.ipynb`](tutorials/tutorial_unsynchronized_cells.ipynb) — downloads the FLASH-seq 3T3 dataset from the paper directly from GEO ([GSE325045](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE325045)) and runs inference on freely-cycling, unsynchronized cells with no external time label.
+- [`tutorials/tutorial_rhythmic_genes.ipynb`](tutorials/tutorial_rhythmic_genes.ipynb) — finds rhythmic genes genome-wide with `scritmo.glm.glm_gene_fit` against a known external time, and shows how the resulting fit table is itself a ready-to-use `params_g` for phase inference.
 
 ## Citation
 
