@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.svg" alt="scRITMO logo" width="140" height="140">
+  <img src="assets/logo.svg" alt="scRITMO logo" width="140" height="140">
   <h1 align="center">scRITMO</h1>
   <p align="center">
     <strong>Single-cell circadian phase inference and desynchrony quantification</strong>
@@ -31,6 +31,11 @@ scRITMO addresses this by:
 2. **Expanded gene sets** — Core clock genes alone create "phase attractor zones" at low sequencing depths where inferred phases artificially cluster. scRITMO mitigates this by incorporating a broader, cell-type-specific set of rhythmically expressed genes (Extended-Set) beyond the core clock circuit.
 3. **Desynchrony quantification** — A variance decomposition framework separates the observed population phase spread (σ_data) into a technical component (σ_technical, estimated via matched simulations) and the true biological desynchrony (σ_bio), enabling meaningful cross-condition comparisons.
 
+<p align="center">
+  <img src="assets/figure_1.png" alt="scRITMO model overview: input scRNA-seq counts, the probabilistic model, and the resulting per-cell posterior and population phase distributions" width="100%">
+</p>
+
+scRITMO takes single-cell expression vectors as input, fits a Negative Binomial likelihood with a harmonic expression model to obtain gene parameters β\*, and marginalizes over each cell's latent phase to recover a full posterior P(θ|x). From this posterior it extracts both a point estimate (the MAP phase) and its uncertainty (circular standard deviation), which aggregate into a population-level phase distribution and its circular mean/cSTD.
 
 ### Core model
 
