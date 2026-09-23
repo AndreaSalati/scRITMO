@@ -74,6 +74,10 @@ pip install -e .
 - [`tutorials/tutorial_unsynchronized_cells.ipynb`](tutorials/tutorial_unsynchronized_cells.ipynb) — downloads the FLASH-seq 3T3 dataset from the paper directly from GEO ([GSE325045](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE325045)) and runs inference on freely-cycling, unsynchronized cells with no external time label.
 - [`tutorials/tutorial_rhythmic_genes.ipynb`](tutorials/tutorial_rhythmic_genes.ipynb) — finds rhythmic genes genome-wide with `scritmo.glm.glm_gene_fit` against a known external time, and shows how the resulting fit table is itself a ready-to-use `params_g` for phase inference.
 
+## Reproducing the paper
+
+The experiments and figure-generating scripts for the preprint are in a separate repository: [AndreaSalati/scRITMO-paper-code](https://github.com/AndreaSalati/scRITMO-paper-code).
+
 ## Citation
 
 If you use scRITMO in your work, please cite:

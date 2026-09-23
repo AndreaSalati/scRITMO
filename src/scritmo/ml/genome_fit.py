@@ -301,11 +301,16 @@ class GenomeFitMixin:
         """
         N_theta_orig, Nc = posteriors_T.shape
 
-        # Create original and target theta values (the model's grid)
-        theta_orig = self.phase_grid(N_theta_orig).numpy()
-        theta_target = self.phase_grid(n_theta_target).numpy()
-        # periodic on the full circle; on a phase_range arc, clamp at the ends
-        period = 2 * np.pi if getattr(self, "phase_range", None) is None else None
+        # Create original and target theta values
+        if getattr(self, "phase_range", None) is None:
+            theta_orig = np.linspace(0, 2 * np.pi, N_theta_orig, endpoint=False)
+            theta_target = np.linspace(0, 2 * np.pi, n_theta_target, endpoint=False)
+            period = 2 * np.pi
+        else:
+            # the phase_range arc is not periodic: clamp at its ends
+            theta_orig = self.posterior_grid(N_theta_orig)
+            theta_target = self.posterior_grid(n_theta_target)
+            period = None
 
         # Interpolate for each cell
         posteriors_interp = np.zeros((n_theta_target, Nc))

@@ -336,7 +336,9 @@ class UnsplicedMixin:
         and a posteriori find the amplitude/phase from there.
         """
 
-        phi_x = nmp(self.phase_grid(n_theta))
+        phi_x = self.posterior_grid(n_theta)
+        if phi_x is None:
+            phi_x = np.linspace(0, 2 * np.pi, n_theta + 1)[:-1]
         X = self.X_matrix(fixed_cell_mode=False, n_theta=n_theta)
         u_xcg = self._unspliced_formula(X=X)
         u_xg = nmp(u_xcg[:,0,:])

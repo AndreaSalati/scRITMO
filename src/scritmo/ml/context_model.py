@@ -351,6 +351,17 @@ class Scritmo(
         self.phase_range = (lo, hi)
         self.phase_width = hi - lo
 
+    def posterior_grid(self, n_theta):
+        """
+        Numpy phase grid for the posterior helpers in :mod:`scritmo.circular`.
+
+        None on the full circle, so those helpers use their own float64 [0, 2π)
+        grid exactly as before ``phase_range`` existed; the arc grid otherwise.
+        """
+        if getattr(self, "phase_range", None) is None:
+            return None
+        return nmp(self.phase_grid(n_theta)).astype(np.float64)
+
     def phase_grid(self, n_theta=None, device=None):
         """
         The phase grid the likelihood is evaluated on.
@@ -646,7 +657,7 @@ class Scritmo(
             n_theta=n_theta,
             cell_chunk=cell_chunk,
         )
-        phi_post = nmp(self.phase_grid(posterior_xc.shape[0]))
+        phi_post = self.posterior_grid(posterior_xc.shape[0])
         post_mean_c, post_var_c, post_std_c = compute_posterior_statistics(
             posterior_xc, phi_x=phi_post
         )
