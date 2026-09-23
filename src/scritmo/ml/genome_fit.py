@@ -218,10 +218,8 @@ class GenomeFitMixin:
             posteriors_c_T, dtype=torch.float32, device=device
         )  # (N_theta, Nc)
 
-        # Create theta grid
-        phi_x = torch.linspace(
-            0, 2 * torch.pi, n_theta + 1, dtype=torch.float32, device=device
-        )[:-1]
+        # Create theta grid (the model's grid: full circle or phase_range arc)
+        phi_x = self.phase_grid(n_theta, device=device)
 
         # Get gene names
         gene_names = adata_new.var_names.values
@@ -303,15 +301,17 @@ class GenomeFitMixin:
         """
         N_theta_orig, Nc = posteriors_T.shape
 
-        # Create original and target theta values
-        theta_orig = np.linspace(0, 2 * np.pi, N_theta_orig, endpoint=False)
-        theta_target = np.linspace(0, 2 * np.pi, n_theta_target, endpoint=False)
+        # Create original and target theta values (the model's grid)
+        theta_orig = self.phase_grid(N_theta_orig).numpy()
+        theta_target = self.phase_grid(n_theta_target).numpy()
+        # periodic on the full circle; on a phase_range arc, clamp at the ends
+        period = 2 * np.pi if getattr(self, "phase_range", None) is None else None
 
         # Interpolate for each cell
         posteriors_interp = np.zeros((n_theta_target, Nc))
         for c in range(Nc):
             posteriors_interp[:, c] = np.interp(
-                theta_target, theta_orig, posteriors_T[:, c], period=2 * np.pi
+                theta_target, theta_orig, posteriors_T[:, c], period=period
             )
 
         # Renormalize to ensure they sum to 1 along theta axis

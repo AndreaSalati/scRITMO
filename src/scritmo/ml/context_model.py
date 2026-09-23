@@ -121,8 +121,9 @@ class Scritmo(
         noise_model="nb",
         fix_disp_val="gene",
         log_amp_fn="logit",
-        method="simpson",
+        method=None,
         entropy_factor=None,
+        phase_range=None,
     ):
         """
         Initialize the Scritmo model from an assembled parameter/data bundle.
@@ -167,12 +168,21 @@ class Scritmo(
                 - None: Single scalar dispersion, trainable.
                 - float: Fixed scalar dispersion, not trained.
             log_amp_fn: "logit" or "log" to control amplitude parameterization
-            method: Integration method, either "simpson" or "sum"
+            method: Integration method, "simpson" or "sum". None (default) picks
+                "simpson" on the full circle and "sum" on an arc. "simpson" is
+                refused on an arc: the periodic rule wraps the last grid point
+                onto the first, which is only true on the full circle.
             entropy_factor: Optional weight for the phase-entropy regularizer. When set
                 (and not in fixed-phase mode), an extra term is added to the loss that
                 penalizes a peaked marginal distribution of cells over the phase grid,
                 encouraging cells to spread around the circle (analogous to CoPhaser's
                 circular entropy term). None or 0 disables it.
+            phase_range: Optional ``(lo, hi)`` in radians, with ``0 < hi - lo < 2π``.
+                Restricts cell phases to the arc [lo, hi]: the phase grid covers
+                only the arc (midpoint rule, integrated with a plain sum) and the
+                cell prior is uniform on it, ``1 / (hi - lo)``. Use it when every
+                cell is known to come from part of the cycle, e.g. samples
+                collected only during the day. None (default) is the full circle.
         """
         super().__init__()
 
@@ -188,6 +198,13 @@ class Scritmo(
 
         self.register_buffer("dm", self.design_matrix(context))
         self.Ny = self.dm.shape[1]
+        self._set_phase_range(phase_range)
+        if method is None:
+            method = "simpson" if self.phase_range is None else "sum"
+        if method == "simpson" and self.phase_range is not None:
+            raise ValueError(
+                "method='simpson' assumes a periodic grid; use 'sum' with phase_range."
+            )
         self.method = method
         self.entropy_factor = entropy_factor
         self.register_buffer("counts", mp["counts"].clone())
@@ -319,6 +336,48 @@ class Scritmo(
         self.context_mode = context_mode
 
     set_context_mode = set_context_mode
+
+    def _set_phase_range(self, phase_range):
+        """Store the phase support: None (full circle) or an arc ``(lo, hi)``."""
+        if phase_range is None:
+            self.phase_range = None
+            self.phase_width = 2 * np.pi
+            return
+        lo, hi = (float(v) for v in phase_range)
+        if not 0 < hi - lo < 2 * np.pi:
+            raise ValueError(
+                f"phase_range needs 0 < hi - lo < 2π, got ({lo:.3f}, {hi:.3f})."
+            )
+        self.phase_range = (lo, hi)
+        self.phase_width = hi - lo
+
+    def phase_grid(self, n_theta=None, device=None):
+        """
+        The phase grid the likelihood is evaluated on.
+
+        On the full circle: ``n_theta`` even points on [0, 2π), endpoint excluded.
+        On an arc (``phase_range``): the ``n_theta`` midpoints of equal bins of
+        [lo, hi], so a plain sum times ``phase_width / n_theta`` is the midpoint rule.
+
+        Args:
+            n_theta: Number of grid points. Defaults to ``self.Nx``.
+            device: Torch device of the result. Defaults to CPU.
+
+        Returns:
+            1D float32 tensor of phases in radians, shape [n_theta].
+        """
+        n = self.Nx if n_theta is None else n_theta
+        # getattr: models pickled before phase_range existed are full-circle
+        phase_range = getattr(self, "phase_range", None)
+        if phase_range is None:
+            return torch.linspace(
+                0, 2 * torch.pi, n + 1, dtype=torch.float32, device=device
+            )[:-1]
+        lo, hi = phase_range
+        step = (hi - lo) / n
+        return lo + step * (
+            torch.arange(n, dtype=torch.float32, device=device) + 0.5
+        )
 
     @classmethod
     def from_params_g(
@@ -502,12 +561,12 @@ class Scritmo(
                     "Counts must be provided when evaluating on new cells."
                 )
             else:
-                # adjust the Nc dependent parameters, first X
-                phi_x_tensor = torch.linspace(
-                    0, 2 * torch.pi, n_theta + 1, dtype=torch.float32
-                )[:-1]
+                # adjust the Nc dependent parameters, first X. Without an explicit
+                # n_theta, keep the model's own grid size (y then carries Nx rows).
+                n_grid = n_theta if n_theta is not None else self.Nx
+                phi_x_tensor = self.phase_grid(n_grid, device=self.m_g.device)
                 X_tensor = harmonic_dm_torch(phi_x_tensor, self.nh, False)
-                X_tensor = X_tensor.unsqueeze(1).expand(n_theta, self.Nc, self.nh * 2)
+                X_tensor = X_tensor.unsqueeze(1).expand(n_grid, self.Nc, self.nh * 2)
                 self.register_buffer("X", X_tensor)
                 # adjust dm
                 self.register_buffer("dm", self.design_matrix(np.ones(self.Nc)))
@@ -587,13 +646,16 @@ class Scritmo(
             n_theta=n_theta,
             cell_chunk=cell_chunk,
         )
-        post_mean_c, post_var_c, post_std_c = compute_posterior_statistics(posterior_xc)
+        phi_post = nmp(self.phase_grid(posterior_xc.shape[0]))
+        post_mean_c, post_var_c, post_std_c = compute_posterior_statistics(
+            posterior_xc, phi_x=phi_post
+        )
         self.disp = nmp(self.log_disp.exp())
         self.post_mean_c = post_mean_c
         self.post_std_c = post_std_c
         self.post_var_c = post_var_c
         self.mle_c = log_mle_c / self.Ng
-        self.post_mode_c = compute_posterior_mode(posterior_xc)
+        self.post_mode_c = compute_posterior_mode(posterior_xc, phi_x=phi_post)
         # self.posterior_xc = posterior_xc  # full (Nx, Nc) posterior array
 
         return post_mean_c
@@ -633,10 +695,13 @@ class Scritmo(
         ll_xc = ll_xc - max_c
         l_xc = torch.exp(ll_xc)
 
+        phase_width = getattr(self, "phase_width", 2 * np.pi)
+        if method == "simpson" and getattr(self, "phase_range", None) is not None:
+            method = "sum"  # the periodic Simpson rule is wrong on an arc
         if method == "simpson":
             l_c = self.vectorized_simpson(l_xc, self.phi_x)
         elif method == "sum":
-            l_c = torch.sum(l_xc, dim=0) * (2 * torch.pi / self.Nx)
+            l_c = torch.sum(l_xc, dim=0) * (phase_width / self.Nx)
 
         return l_xc / l_c
 
@@ -795,9 +860,7 @@ class Scritmo(
             counts = self.counts[indices]
 
         if n_theta is not None:
-            phi_x_new = torch.linspace(
-                0, 2 * torch.pi, n_theta + 1, dtype=torch.float32, device=self.dev
-            )[:-1]
+            phi_x_new = self.phase_grid(n_theta, device=self.dev)
             X_new = harmonic_dm_torch(phi_x_new, self.nh, False)
             X = X_new.unsqueeze(1).expand(n_theta, self.Nc, self.nh * 2)
             X = X[:, indices, :]
@@ -1160,6 +1223,12 @@ class Scritmo(
 
         device = resolve_device(device)
 
+        if getattr(self, "phase_range", None) is not None:
+            raise NotImplementedError(
+                "estimate_phase_desynchrony simulates its technical twin on the full "
+                "circle; it is not supported for models fit with phase_range."
+            )
+
         if sigma_tech_method not in ("simulation", "harmonic"):
             raise ValueError(
                 f"Unknown sigma_tech_method '{sigma_tech_method}'. Use 'simulation' or 'harmonic' "
@@ -1303,8 +1372,9 @@ class Scritmo(
                 grid: reads ``mp["fixed_cell_phases"]`` (shape [Nc]), registers it
                 as the ``phi_c`` buffer and sets ``Nx = 1``. ``mp`` is required in
                 this branch.
-            n_theta: Number of grid points on the circle. Defaults to ``self.Nx``.
-                Ignored in fixed-cell mode.
+            n_theta: Number of grid points on the circle (or on the arc, see
+                :meth:`phase_grid`). Defaults to ``self.Nx``. Ignored in
+                fixed-cell mode.
             mp: The model-parameters dict; only read in fixed-cell mode.
 
         Returns:
@@ -1330,10 +1400,7 @@ class Scritmo(
             if n_theta is None:
                 n_theta = self.Nx
             self.fixed_cell_mode = False
-            # EXISTING LOGIC
-            phi_x_tensor = torch.linspace(
-                0, 2 * torch.pi, n_theta + 1, dtype=torch.float32
-            )[:-1]
+            phi_x_tensor = self.phase_grid(n_theta)
             self.register_buffer("phi_x", phi_x_tensor)
 
             # Nx Np -> Nx Nc Np

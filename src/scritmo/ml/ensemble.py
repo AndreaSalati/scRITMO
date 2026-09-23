@@ -85,9 +85,7 @@ class EnsembleMixin:
             n_theta = self.Nx
             phi_grid = self.phi_x
         else:
-            phi_grid = torch.linspace(
-                0, 2 * torch.pi, n_theta + 1, dtype=torch.float32, device=self.dev
-            )[:-1]
+            phi_grid = self.phase_grid(n_theta, device=self.dev)
 
         # 2. Compute or Retrieve Full Likelihood (Cache check)
         # Check if cache exists and dimensions match current request
