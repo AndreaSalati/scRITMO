@@ -271,6 +271,14 @@ class UnsplicedMixin:
           - beta_over_q = gamma_mean * exp(-lambda): splicing rate / capture ratio
           - feasible: cos(delta) > 0 and |tan delta| <= 1 / rho, i.e. the minimal-rhythm
             point has beta > 0 and gamma(theta) >= 0 everywhere.
+          - eps_min: smallest RELATIVE degradation rhythm eps compatible with the data,
+            for gamma(theta) = gamma_mean (1 + eps cos(theta - phi_gamma)):
+            rho |sin delta| if |delta| < 90 deg, else rho. Identified; 0 in the null.
+          - gamma_mean_min = omega A (sqrt(1 - rho^2 sin^2 delta) - rho cos delta)
+            / (1 - rho^2) [1/h]: smallest gamma_mean on the beta-gamma ridge with
+            gamma(theta) >= 0 (gamma_mean >= A_gamma). Identified under rhythmic
+            degradation; omega A / (1 + rho) at delta = 0.
+          - half_life_max_h = ln 2 / gamma_mean_min
 
         "kinetic" parametrization (legacy): gamma_mean, amp_gamma, phase_gamma, k_splice.
         """
@@ -295,6 +303,11 @@ class UnsplicedMixin:
         cos_d, sin_d = np.cos(delta), np.sin(delta)
         feasible = (cos_d > 0) & (np.abs(sin_d) * rho <= cos_d)
         gamma_mean = np.where(feasible, omega_A * cos_d / rho, np.nan)
+        # bounds over the whole ridge (gamma_mean = m beta, G = beta r - D, beta > 0)
+        eps_min = np.where(cos_d > 0, rho * np.abs(sin_d), rho)
+        gamma_mean_min = omega_A * (
+            np.sqrt(1 - rho**2 * sin_d**2) - rho * cos_d
+        ) / (1 - rho**2)
 
         return pd.DataFrame({
             "u_level": lam,
@@ -307,6 +320,9 @@ class UnsplicedMixin:
             "half_life_h": np.log(2) / gamma_mean,
             "beta_over_q": gamma_mean * np.exp(-lam),
             "feasible": feasible,
+            "eps_min": eps_min,
+            "gamma_mean_min": gamma_mean_min,
+            "half_life_max_h": np.log(2) / gamma_mean_min,
         }, index=self.genes)
 
     def analyze_rhythmic_dominance(self):

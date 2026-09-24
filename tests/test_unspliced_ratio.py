@@ -115,6 +115,37 @@ def test_derived_rates_minimal_rhythm():
     assert df.loc["g0", "feasible"]
 
 
+def test_ridge_bounds_brute_force():
+    """eps_min and gamma_mean_min against a scan of the beta-gamma ridge
+    (gamma_mean = m beta, G = beta r - D) for the fitted (m, rho, delta)."""
+    adata, par, theta, L = _toy_adata()
+    cm = _fit(adata, par, theta, L, rd=True)
+    with torch.no_grad():
+        cm.u_logit_rho.copy_(torch.logit(torch.tensor([0.4, 0.7, 0.2])))
+        cm.u_delta.copy_(torch.tensor([0.6, 2.3, -1.2]))
+    df = cm.get_kinetic_parameters()
+    A = cm._amp_s().detach().numpy().astype(float)
+    phi = cm.acrophase.detach().numpy().astype(float)
+    beta = np.exp(np.linspace(np.log(1e-4), np.log(1e5), 400001))
+    for i, g in enumerate(cm.genes):
+        m, rho, delta = np.exp(df.loc[g, "u_level"]), df.loc[g, "rho"], df.loc[g, "delta"]
+        psi = phi[i] - np.pi / 2 + delta
+        r = m * rho * np.array([np.cos(psi), np.sin(psi)])
+        D = W * A[i] * np.array([np.cos(phi[i] - np.pi / 2), np.sin(phi[i] - np.pi / 2)])
+        G = beta[:, None] * r[None] - D[None]
+        gamma_mean, A_gamma = m * beta, np.linalg.norm(G, axis=1)
+        np.testing.assert_allclose(df.loc[g, "eps_min"], (A_gamma / gamma_mean).min(), rtol=1e-3, atol=1e-6)
+        ok = gamma_mean >= A_gamma
+        np.testing.assert_allclose(df.loc[g, "gamma_mean_min"], gamma_mean[ok].min(), rtol=1e-3)
+    # delta = 0 limit: gamma_mean_min = omega A / (1 + rho), eps_min = 0
+    cm0 = _fit(adata, par, theta, L, rd=False)
+    kp = cm0.get_kinetic_parameters()
+    A0 = cm0._amp_s().detach().numpy()
+    np.testing.assert_allclose(kp["gamma_mean_min"], W * A0 / (1 + kp["rho"]), rtol=1e-5)
+    np.testing.assert_allclose(kp["eps_min"], 0, atol=1e-7)
+    np.testing.assert_allclose(kp["half_life_max_h"], np.log(2) / kp["gamma_mean_min"])
+
+
 def test_lrt_and_fisher_after_training():
     adata, par, theta, L = _toy_adata(n_cells=2000)
     cm0, _, _, d, du = warmup_and_train(
