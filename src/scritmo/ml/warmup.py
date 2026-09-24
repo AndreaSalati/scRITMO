@@ -32,6 +32,7 @@ def warmup_and_train(
     k_batch=None,
     # unspliced parameters
     rhythmic_degradation=True,
+    unspliced_param="ratio",
     # training
     n_epochs=300,
     layer="spliced",
@@ -193,9 +194,13 @@ def warmup_and_train(
     batch, phi_b, k_batch, fixed_prior : optional
         Batch-effect phase shifts: a per-batch shift ``phi_b`` with concentration
         ``k_batch``, trainable unless ``fixed_prior`` is True.
-    unspliced_layer, rhythmic_degradation : optional
+    unspliced_layer, rhythmic_degradation, unspliced_param : optional
         Joint spliced/unspliced modeling. Giving ``unspliced_layer`` enables it and
-        adds the unspliced tensor to the returns.
+        adds the unspliced tensor to the returns. ``unspliced_param="ratio"`` (default)
+        fits the identifiable u/s ratio curve (level, depth rho, phase mismatch delta);
+        ``rhythmic_degradation=False`` fixes delta = 0 (constant degradation).
+        ``"kinetic"`` is the legacy (beta, gamma) parametrization. See
+        :class:`scritmo.ml.unspliced.unspliced_deg.UnsplicedMixin`.
     weights_g : array-like, optional
         Per-gene weights on the likelihood, shape [Ng]. Defaults to ones.
     entropy_factor : float, optional
@@ -278,6 +283,12 @@ def warmup_and_train(
 
     mp["k_beta"] = k_beta
     mp["rhythmic_degradation"] = rhythmic_degradation
+    mp["unspliced_param"] = unspliced_param
+    if data_u_c is not None:
+        # start the u/s level at the pooled per-gene ratio
+        s_tot = data_c[0].sum(0)
+        u_tot = data_u_c[0].sum(0)
+        mp["u_level_init"] = torch.log((u_tot + 1.0) / (s_tot + 1.0))
 
     if fixed_cell_phases is not None:
         mp["fixed_cell_phases"] = fixed_cell_phases

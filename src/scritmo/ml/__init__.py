@@ -6,6 +6,7 @@ from .warmup import warmup_and_train
 # from .svi import SVI_model, get_svi_marginalized_posterior
 from .discrete_MI import MI
 from .context_model import Scritmo, ContextModel
+from .unspliced.unspliced_deg import unspliced_lrt, refine_mle
 from .utils import *
 from .simulations.simulation_plot import *
 from .simulations.simulate_populations import (

@@ -17,6 +17,7 @@ class FisherUncertaintyMixin:
         gene_indices=None, 
         batch_size=10, 
         param_subset=None,
+        phases=None,
     ):
         """
         Computes the standard deviation for biophysical parameters.
@@ -26,6 +27,8 @@ class FisherUncertaintyMixin:
                                                     Defaults to all genes.
             batch_size (int): Not used in this specific implementation but kept for API consistency.
                               (This implementation loops gene-by-gene for memory safety).
+            phases (array, optional): "ratio" parametrization only; the cell phases
+                the likelihood is evaluated at (see :meth:`_fisher_ratio`).
             param_subset (list, optional): List of physical parameter names to return.
                                            Options: ['k_splice', 'gamma_mean', 'A_gamma', 'phi_gamma']
                                            If None, returns all.
@@ -35,6 +38,8 @@ class FisherUncertaintyMixin:
         """
         if not self.unspliced_mode:
             raise ValueError("Fisher uncertainty currently only implemented for unspliced kinetics.")
+        if self._unspliced_param() == "ratio":
+            return self._fisher_ratio(y_u, gene_indices=gene_indices, phases=phases)
 
         if gene_indices is None:
             gene_indices = range(self.Ng)
@@ -233,3 +238,103 @@ class FisherUncertaintyMixin:
             return df[cols]
             
         return df
+    def _fisher_ratio(self, y_u, gene_indices=None, phases=None):
+        """
+        Fisher uncertainty for the "ratio" parametrization.
+
+        Per gene, the observed information of the unspliced NLL in the unconstrained
+        parameters (lambda, logit rho[, delta]), with the spliced curve held fixed and
+        the cell phases fixed at ``phases``. Default phases: the known ones in
+        fixed-cell mode, else the posterior modes (``post_mode_c``; a plug-in that
+        ignores phase uncertainty). No jitter is added: the parametrization has no
+        flat direction, so a non-invertible Hessian is reported as NaN.
+
+        The delta method maps the covariance to (u_level, rho, delta, gamma_mean,
+        A_gamma_min). gamma_mean and A_gamma_min are conditional on the spliced
+        amplitude A (their uncertainty from A is not included).
+
+        Returns:
+            pd.DataFrame indexed by gene with ``<name>_std`` columns and
+            ``corr_rho_delta`` (NaN for the null model).
+        """
+        if gene_indices is None:
+            gene_indices = range(self.Ng)
+        elif isinstance(gene_indices, slice):
+            gene_indices = range(*gene_indices.indices(self.Ng))
+
+        if phases is None:
+            if self.fixed_cell_mode:
+                phases = self.phi_c
+            elif getattr(self, "post_mode_c", None) is not None:
+                phases = self.post_mode_c
+            else:
+                raise ValueError("Pass phases=, or run get_inferred_phases first.")
+        theta = torch.as_tensor(np.asarray(nmp(phases) if torch.is_tensor(phases) else phases),
+                                dtype=torch.float32, device=self.dev).reshape(-1)
+
+        y = y_u[0] if y_u.dim() == 3 else y_u  # [Nc, Ng]
+        L = self.counts_u.reshape(-1)
+        rd = self.rhythmic_degradation
+
+        with torch.no_grad():
+            ab = self._get_ab()
+            intercept_cg = torch.matmul(self.dm, self.m_yg) + self.m_g
+            lambda_cg = torch.matmul(self.dm, self.log_lambda_y.exp())
+            log_s = (torch.cos(theta)[:, None] * ab[0] + torch.sin(theta)[:, None] * ab[1]) \
+                * lambda_cg + intercept_cg
+            s_cg = torch.exp(log_s)
+            omega_A = self.omega * self._amp_s()
+            disp_all = torch.exp(self.log_disp_u)
+
+        names = ["u_level", "rho", "delta", "gamma_mean", "A_gamma_min"]
+        rows = []
+        for g in gene_indices:
+            acro = self.acrophase[g].detach()
+            oA = omega_A[g]
+            disp = disp_all if disp_all.ndim == 0 else disp_all.reshape(-1)[g]
+            p0 = [self.u_log_level[g].detach(), self.u_logit_rho[g].detach()]
+            if rd:
+                p0.append(self.u_delta[g].detach())
+            p0 = torch.stack(p0).clone()
+
+            def nll(p):
+                d = p[2] if rd else torch.zeros((), device=p.device)
+                rho = torch.sigmoid(p[1])
+                h = torch.exp(p[0]) * (1 + rho * torch.cos(theta - (acro - torch.pi / 2 + d)))
+                mu = L * s_cg[:, g] * h
+                prob = (disp * mu / (1 + disp * mu)).clamp(1e-6, 1 - 1e-6)
+                dist = torch.distributions.NegativeBinomial(total_count=1 / disp, probs=prob)
+                return -dist.log_prob(y[:, g]).sum()
+
+            def phys(p):
+                d = p[2] if rd else torch.zeros((), device=p.device)
+                rho = torch.sigmoid(p[1])
+                return torch.stack([
+                    p[0], rho, d, oA * torch.cos(d) / rho, oA * torch.abs(torch.sin(d))
+                ])
+
+            row = {"gene": self.genes[g]}
+            try:
+                H = hessian(nll, p0).double()
+                cov = torch.linalg.inv(H)
+                if not bool(torch.all(torch.linalg.eigvalsh(H) > 0)):
+                    raise RuntimeError("Hessian not positive definite")
+                J = jacobian(phys, p0).double()
+                cov_phys = J @ cov @ J.T
+                std = torch.sqrt(torch.diag(cov_phys).clamp(min=0))
+                for i, n in enumerate(names):
+                    row[f"{n}_std"] = std[i].item()
+                row["corr_rho_delta"] = (
+                    (cov_phys[1, 2] / (std[1] * std[2])).item() if rd else np.nan
+                )
+            except RuntimeError as e:
+                print(f"Warning: Fisher failed for gene {self.genes[g]}: {e}")
+                for n in names:
+                    row[f"{n}_std"] = np.nan
+                row["corr_rho_delta"] = np.nan
+            if not rd:
+                row["delta_std"] = np.nan
+                row["A_gamma_min_std"] = np.nan
+            rows.append(row)
+
+        return pd.DataFrame(rows).set_index("gene")
