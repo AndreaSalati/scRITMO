@@ -12,6 +12,43 @@ from scritmo import Beta
 from .utils import assemble_mp, resolve_device
 
 
+def arc_mesor_correction(params_g, phase_range, n_grid=200):
+    """
+    Log bias of an intercept-only mesor estimate when phases live on an arc.
+
+    With cells uniform on ``[lo, hi]``, the intercept-only GLM estimates
+    ``a_0 + log(mean_θ exp(h_g(θ)))``, where ``h_g`` is the harmonic part of the
+    gene's log-expression. On the full circle that term is small (``log I0(amp)``
+    for one harmonic); on an arc it can reach ``±amp``, depending on whether the
+    arc sits on the gene's peak or trough. Subtracting it recovers the mesor.
+
+    Parameters
+    ----------
+    params_g : Beta
+        Template gene parameters; only the harmonic columns ``a_i``/``b_i``
+        (i ≥ 1) are used, so ``a_0`` may be anything.
+    phase_range : tuple of float
+        ``(lo, hi)`` in radians, as passed to ``warmup_and_train``.
+    n_grid : int, default 200
+        Midpoint-rule grid points on the arc.
+
+    Returns
+    -------
+    pd.Series
+        Per-gene correction, indexed like ``params_g``, to subtract from ``a_0``.
+    """
+    lo, hi = (float(v) for v in phase_range)
+    step = (hi - lo) / n_grid
+    theta = lo + step * (np.arange(n_grid) + 0.5)
+    beta = Beta(params_g.copy())
+    beta["a_0"] = 0.0
+    h = beta.predict(theta)  # [n_grid, Ng], harmonic part only
+    # log-mean-exp over the grid, stabilized by the per-gene max
+    h_max = h.max(axis=0)
+    corr = h_max + np.log(np.mean(np.exp(h - h_max), axis=0))
+    return pd.Series(corr, index=params_g.index)
+
+
 def warmup_and_train(
     adata,
     params_g,
@@ -74,7 +111,10 @@ def warmup_and_train(
     1. Mesor warm-start (``init_mean=True``): an intercept-only GLM per gene
        (``sr.glm_gene_fit`` with ``n_harmonics=0``) re-estimates ``a_0``. Genes the
        GLM drops are dropped from ``params_g`` too, so the returned parameter table
-       can be a subset of the input.
+       can be a subset of the input. With ``phase_range`` set, the intercept is
+       then corrected for the arc (:func:`arc_mesor_correction`): cells confined
+       to one part of the cycle would otherwise bias ``a_0`` by up to ± the
+       template amplitude.
     2. Data assembly (``assemble_mp``): builds the ``[n_theta, Nc, Ng]`` data tensor
        and the ``mp`` bundle on ``device``.
     3. Model construction and ``.to(device)``.
@@ -252,6 +292,10 @@ def warmup_and_train(
         genes = par_0.index
         params_g = params_g.loc[genes]
         params_g["a_0"] = par_0.loc[params_g.index, "a_0"]
+        # On an arc the GLM intercept is the gene's mean over the arc, not its
+        # mesor. Must run before kill_amps: it needs the template harmonics.
+        if phase_range is not None:
+            params_g["a_0"] -= arc_mesor_correction(params_g, phase_range)
 
     if kill_amps:
         params_g.kill_amps()
