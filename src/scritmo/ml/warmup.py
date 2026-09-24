@@ -49,6 +49,7 @@ def warmup_and_train(
     weights_g=None,
     fixed_cell_phases=None,
     posterior_cell_chunk=None,
+    phase_range=None,
 ):
     """
     Fit the scRITMO model to an AnnData and infer a phase posterior per cell.
@@ -161,6 +162,15 @@ def warmup_and_train(
         Ground-truth phases. Only used to report a per-epoch MAD; it never enters
         the loss. When given (and not in fixed-cell mode) the second return value
         is accompanied by a per-epoch MAD trace.
+    phase_range : tuple of float, optional
+        ``(lo, hi)`` in radians, ``0 < hi - lo < 2π``. Restricts every cell's
+        phase to the arc [lo, hi] instead of the full circle: the grid of
+        ``n_theta`` (and ``n_theta_post``) points covers only the arc, the cell
+        prior is uniform on it, and the marginal likelihood is a plain sum (not
+        Simpson's rule, which assumes a periodic grid). Use it when all samples are
+        known to come from one part of the cycle — e.g. biopsies taken only during
+        the day. Returned phases are still in [0, 2π). Not supported by
+        ``estimate_phase_desynchrony``.
     posterior_cell_chunk : int, optional
         Process the final posterior in chunks of this many cells. The
         ``(n_theta_post, Nc, Ng)`` likelihood tensor exceeds GPU/host memory for
@@ -293,6 +303,7 @@ def warmup_and_train(
         fix_disp_val=fix_disp_val,
         log_amp_fn=log_amp_fn,
         entropy_factor=entropy_factor,
+        phase_range=phase_range,
     )
     cmodel.to(device)
 

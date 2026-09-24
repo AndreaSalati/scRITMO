@@ -115,9 +115,7 @@ def nb_dist_extra_posterior(
 
     if n_theta is not None:
 
-        phi_x_new = torch.linspace(
-            0, 2 * torch.pi, n_theta + 1, dtype=torch.float32, device=self.dev
-        )[:-1]
+        phi_x_new = self.phase_grid(n_theta, device=self.dev)
 
         X_new = harmonic_dm_torch(phi_x_new, self.nh, False)
         X = X_new.unsqueeze(1).expand(n_theta, self.Nc, self.nh * 2)

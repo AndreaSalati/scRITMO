@@ -336,7 +336,9 @@ class UnsplicedMixin:
         and a posteriori find the amplitude/phase from there.
         """
 
-        phi_x = np.linspace(0, 2 * np.pi, n_theta + 1)[:-1]
+        phi_x = self.posterior_grid(n_theta)
+        if phi_x is None:
+            phi_x = np.linspace(0, 2 * np.pi, n_theta + 1)[:-1]
         X = self.X_matrix(fixed_cell_mode=False, n_theta=n_theta)
         u_xcg = self._unspliced_formula(X=X)
         u_xg = nmp(u_xcg[:,0,:])
@@ -509,9 +511,7 @@ class UnsplicedMixin:
             counts = self.counts_u[indices]
 
         if n_theta is not None:
-            phi_x_new = torch.linspace(
-                0, 2 * torch.pi, n_theta + 1, dtype=torch.float32, device=self.dev
-            )[:-1]
+            phi_x_new = self.phase_grid(n_theta, device=self.dev)
             X_new = harmonic_dm_torch(phi_x_new, self.nh, False)
             X = X_new.unsqueeze(1).expand(n_theta, self.Nc, self.nh * 2)
             X = X[:, indices, :]

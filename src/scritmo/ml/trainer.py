@@ -153,7 +153,7 @@ def train_ritmo(
                     data,  y_u=data_u, method="sum"
                 )
                 post_mode_c = compute_posterior_mean(
-                    posterior_xc,
+                    posterior_xc, phi_x=model.posterior_grid(posterior_xc.shape[0])
                 )
                 _, aligned_mad = optimal_shift(post_mode_c, true_phase, verbose=False)
                 mad_epochs.append(aligned_mad)

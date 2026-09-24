@@ -156,12 +156,17 @@ class MarginalizationMixin:
         if method == "simpson":
             l_c = self.vectorized_simpson(l_xc, self.phi_x)
         elif method == "sum":
-            l_c = torch.sum(l_xc, dim=0) * (2 * torch.pi / self.Nx)
+            # phase_width is 2π on the full circle, hi - lo on a phase_range arc
+            l_c = torch.sum(l_xc, dim=0) * (self._phase_width() / self.Nx)
 
         if return_integrand:
             return l_c, max_c, l_xc
         else:
             return l_c, max_c
+
+    def _phase_width(self):
+        # getattr: models pickled before phase_range existed are full-circle
+        return getattr(self, "phase_width", 2 * torch.pi)
 
     def cell_prior(self, indices=None, n_theta=None):
         """
@@ -186,7 +191,10 @@ class MarginalizationMixin:
             prior_xc = prior_xb @ dm.T
 
         else:
-            prior_xc = torch.log(torch.tensor(1 / (2 * torch.pi), dtype=torch.float32))
+            # flat prior on the phase support (the circle, or the phase_range arc)
+            prior_xc = torch.log(
+                torch.tensor(1 / self._phase_width(), dtype=torch.float32)
+            )
 
         return prior_xc
 

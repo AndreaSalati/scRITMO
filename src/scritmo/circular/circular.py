@@ -140,63 +140,80 @@ def R2cstd(R):
     return cstd
 
 
-def compute_posterior_statistics(l_xc):
+def _grid(n, phi_x=None):
+    """Phase grid of a discrete posterior: ``phi_x`` if given, else n points on [0, 2π)."""
+    if phi_x is None:
+        return np.linspace(0, 2 * np.pi, n + 1)[:-1]
+    phi_x = np.asarray(phi_x)
+    if phi_x.shape[0] != n:
+        raise ValueError(f"phi_x has {phi_x.shape[0]} points, the posterior has {n}.")
+    return phi_x
+
+
+def compute_posterior_statistics(l_xc, phi_x=None):
     """
     Compute posterior circular statistics.
     To be sure that l_xc is a discrete pdf it re normalizes it.
+
+    ``phi_x`` is the phase of each row of ``l_xc``. None means an even grid on
+    [0, 2π); pass the model's grid when it spans only an arc (``phase_range``).
     """
     l_xc = l_xc / l_xc.sum(axis=0)
-    post_mean_c = np.apply_along_axis(circ_mean_P, 0, l_xc)
-    post_var_c = np.apply_along_axis(circ_var_P, 0, l_xc)
-    post_std_c = np.apply_along_axis(circ_std_P, 0, l_xc)
+    phis = _grid(l_xc.shape[0], phi_x)
+    post_mean_c = np.apply_along_axis(circ_mean_P, 0, l_xc, phis)
+    post_var_c = np.apply_along_axis(circ_var_P, 0, l_xc, phis)
+    post_std_c = np.apply_along_axis(circ_std_P, 0, l_xc, phis)
     return post_mean_c, post_var_c, post_std_c
 
 
-def compute_posterior_mean(l_xc):
+def compute_posterior_mean(l_xc, phi_x=None):
     """
     Compute posterior circular statistics.
     To be sure that l_xc is a discrete pdf it re normalizes it.
+    See :func:`compute_posterior_statistics` for ``phi_x``.
     """
     l_xc = l_xc / l_xc.sum(axis=0)
-    post_mean_c = np.apply_along_axis(circ_mean_P, 0, l_xc)
+    phis = _grid(l_xc.shape[0], phi_x)
+    post_mean_c = np.apply_along_axis(circ_mean_P, 0, l_xc, phis)
     return post_mean_c
 
 
-def compute_posterior_mode(l_xc):
+def compute_posterior_mode(l_xc, phi_x=None):
     """
     This function is used to find the MODE of the distribution.
     Very often distributions are bimodal, and gradient descent fails
     to find the correct solution.
+    See :func:`compute_posterior_statistics` for ``phi_x``.
     """
     # for every cell get the argmax of the likelihood
-    phi_x = np.linspace(0, 2 * np.pi, l_xc.shape[0] + 1)[:-1]
+    phi_x = _grid(l_xc.shape[0], phi_x)
 
     phi_max_ind = np.argmax(l_xc, axis=0)
     # phi_max_ind = list(phi_max_ind)
-    phi_mode = phi_x[phi_max_ind]
+    phi_mode = phi_x[phi_max_ind] % (2 * np.pi)
     return phi_mode
 
 
 # fucntions that used to get the moments of the numerical approximation of the
-# posterior distribution of the phase
-def circ_mean_P(P):
+# posterior distribution of the phase. ``phis`` defaults to an even [0, 2π) grid.
+def circ_mean_P(P, phis=None):
 
-    phis = np.linspace(0, 2 * np.pi, P.shape[0] + 1)[:-1]
+    phis = _grid(P.shape[0], phis)
     # take complex arg of sum
     mu = np.angle(np.sum(np.exp(1j * phis) * P))
     return mu % (2 * np.pi)
 
 
-def circ_var_P(P):
+def circ_var_P(P, phis=None):
 
-    phis = np.linspace(0, 2 * np.pi, P.shape[0] + 1)[:-1]
+    phis = _grid(P.shape[0], phis)
     # take complex arg of sum
     var = 1 - np.abs(np.sum(np.exp(1j * phis) * P))
     return var
 
 
-def circ_std_P(P):
+def circ_std_P(P, phis=None):
 
-    phis = np.linspace(0, 2 * np.pi, P.shape[0] + 1)[:-1]
+    phis = _grid(P.shape[0], phis)
     std = np.sqrt(-2 * np.log(np.abs(np.sum(np.exp(1j * phis) * P))))
     return std
