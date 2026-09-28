@@ -256,3 +256,124 @@ def test_attach_clamp_below_floor():
     assert out_c["Bio_cSTD"].iloc[1] == 0.0
     assert out_c["Technical_cSTD"].iloc[1] == pytest.approx(out_c["Data_cSTD"].iloc[1])
     assert out_c["Bio_cSTD"].iloc[0] == pytest.approx(0.2 * rh)
+
+
+# ---------------------------------------------------------------------------
+# VECTOR form
+# ---------------------------------------------------------------------------
+from scritmo.ml.deconvolution import (  # noqa: E402
+    eval_complex_fourier,
+    grid_complex_fourier,
+    resultant_under_bump,
+    solve_vector,
+)
+
+# a band-limited complex resultant with an identity-like j=1 term plus terms that create
+# a non-trivial attractor bias m(θ) − θ and a phase-dependent r(θ); |ρ| < 1 everywhere
+C_RHO = {1: 0.72, 0: 0.05, 2: 0.08j, -1: 0.04, 3: -0.05, -2: 0.03 + 0.02j}
+
+
+def rho_true(theta):
+    theta = np.asarray(theta, dtype=float)
+    return sum(c * np.exp(1j * j * theta) for j, c in C_RHO.items())
+
+
+def z_numerical(mu, sigma, rho=rho_true, n=200_000):
+    """E_{θ~WN(μ,σ)}[ρ(θ)] by quadrature."""
+    th = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    p = wrapped_normal_pdf(th, mu, sigma)
+    return complex(np.sum(p * rho(th)) * 2 * np.pi / n)
+
+
+@pytest.fixture(scope="module")
+def cc():
+    return grid_complex_fourier(GRID, rho_true(GRID))
+
+
+def test_rho_is_nontrivial():
+    th = np.linspace(0, 2 * np.pi, 500, endpoint=False)
+    r = rho_true(th)
+    assert np.abs(r).max() < 1
+    bias = np.angle(r * np.exp(-1j * th))
+    assert np.ptp(bias) > 0.2 and np.ptp(np.abs(r)) > 0.1
+
+
+def test_complex_fourier_recovers_coefficients(cc):
+    for j, cj in zip(cc["j"], cc["c"]):
+        assert cj == pytest.approx(C_RHO.get(int(j), 0.0), abs=1e-12)
+    th = np.linspace(0, 2 * np.pi, 91)
+    np.testing.assert_allclose(eval_complex_fourier(th, cc), rho_true(th), atol=1e-12)
+
+
+def test_complex_fourier_nyquist_interpolates():
+    rng = np.random.default_rng(7)
+    vals = 0.6 * np.exp(1j * GRID) + 0.05 * (rng.standard_normal(24)
+                                             + 1j * rng.standard_normal(24))
+    vals = vals + 0.03 * np.exp(12j * GRID)
+    c = grid_complex_fourier(GRID, vals)
+    np.testing.assert_allclose(eval_complex_fourier(GRID, c), vals, atol=1e-12)
+    # the Nyquist term is split evenly between j = -12 and j = +12
+    assert abs(c["c"][0]) == pytest.approx(abs(c["c"][-1]), abs=1e-12)
+
+
+def test_resultant_under_bump_matches_quadrature(cc):
+    for mu in (0.3, 2.0, 4.5):
+        for sigma in (0.1, 0.5, 1.1):
+            assert resultant_under_bump(mu, sigma, cc) == pytest.approx(
+                z_numerical(mu, sigma), abs=1e-9)
+
+
+@pytest.mark.parametrize("mu", [0.0, 1.1, 2.6, 4.0, 5.5])
+@pytest.mark.parametrize("sigma", [0.05, 0.3, 0.7, 1.2])
+@pytest.mark.parametrize("n", [1000, np.inf])
+def test_vector_recovers_sigma(cc, mu, sigma, n):
+    z = z_numerical(mu, sigma)
+    R2 = abs(z) ** 2 + (0.0 if not np.isfinite(n) else (1 - abs(z) ** 2) / n)
+    sol = solve_vector(R2, n, mu, cc)
+    assert sol["flag"] == "ok"
+    assert sol["sigma"] == pytest.approx(sigma, abs=1e-6)
+    assert sol["pred_dir"] == pytest.approx(np.angle(z) % (2 * np.pi), abs=1e-6)
+
+
+def test_variance_exact_biased_where_vector_is_not(cc):
+    # the variance form sees only f = -2 ln r on the grid: the infinite-n twin floor
+    f_grid = -2 * np.log(np.abs(rho_true(GRID)))
+    coef_f = grid_fourier_coefficients(GRID, f_grid)
+    sigma = 0.6
+    err_exact, err_vec = [], []
+    for mu in np.linspace(0, 2 * np.pi, 8, endpoint=False):
+        z = z_numerical(mu, sigma)
+        V = -2 * np.log(abs(z))  # Data cSTD^2 at infinite n
+        se = solve_exact(V, mu, coef_f)
+        sv = solve_vector(abs(z) ** 2, np.inf, mu, cc)
+        err_exact.append(se["sigma"] - sigma if se["flag"] == "ok" else np.inf)
+        err_vec.append(sv["sigma"] - sigma)
+    assert np.max(np.abs(err_vec)) < 1e-6
+    assert np.max(np.abs(err_exact)) > 0.05
+
+
+def test_vector_flags(cc):
+    mu = 1.0
+    L0 = abs(resultant_under_bump(mu, 0.0, cc)) ** 2
+    assert solve_vector(min(L0 + 0.01, 1.0), np.inf, mu, cc)["flag"] == "below_floor"
+    assert solve_vector(L0, np.inf, mu, cc)["sigma"] == pytest.approx(0.0, abs=1e-12)
+    assert solve_vector(0.0, np.inf, mu, cc)["flag"] == "no_root"
+
+
+@pytest.mark.parametrize("n_rep", [None, 3])
+def test_vector_aggregation(n_rep):
+    rng = np.random.default_rng(5)
+    sigma_bio = 0.3
+    df_grid, df_real = _synthetic_frames(rng, sigma_bio=sigma_bio)
+    table, diag = aggregate_technical_deconvolution(
+        df_grid, df_real, deconv_form="vector", n_replicates=n_rep)
+    assert set(table["deconv_flag"]) == {"ok"}
+    tol = 0.03 if n_rep is None else 0.06
+    np.testing.assert_allclose(table["deconv_sigma"], sigma_bio, atol=tol)
+    # direction check: the model predicts the data's mean direction
+    d = np.angle(np.exp(1j * (table["deconv_pred_dir"] - table["deconv_data_dir"])))
+    assert np.max(np.abs(d)) < 0.02
+    # implied split Data^2 = Tech^2 + sigma^2
+    np.testing.assert_allclose(
+        table["deconv_V"], table["Technical_cSTD"] ** 2 + table["deconv_sigma"] ** 2,
+        rtol=1e-9)

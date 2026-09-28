@@ -1224,13 +1224,20 @@ class Scritmo(
             the error grows exactly where a phase-resolved floor should help. Kept only for
             reproducibility; see
             :func:`scritmo.ml.analysis_utils.aggregate_technical_harmonic` for the measured cost.
-        deconv_form : {"exact", "taylor"}, default "exact"
+        deconv_form : {"exact", "taylor", "vector"}, default "exact"
             (deconvolution method) "exact" solves T_b(σ) + σ² = V_b on [0, π] with brentq
             and returns NaN with ``deconv_flag`` ∈ {"below_floor", "no_root",
             "non_monotone"} when σ is not identified (h − V_b must cross zero exactly
             once, with dh/dσ > 0 at the root). "taylor" is the closed form
             (V_b − f(μ_b)) / (1 + ½ f''(μ_b)) with flags "below_floor", "denominator",
-            "negative_tech". The group phase μ_b is chosen by ``use_circular_mean`` exactly
+            "negative_tech". "vector" works on the complex mean resultant instead of the
+            variance: ρ(φ_k) = mean of exp(i·post_mode) over all grid cells at φ_k, its
+            complex Fourier series smoothed by the bump, ρ̄_b(σ) = Σ_j c_j e^{−j²σ²/2}
+            e^{ijμ_b}, and σ solves |ρ̄_b(σ)|² + (1 − |ρ̄_b(σ)|²)/n_b = |z̄_b|². It keeps the
+            direction of ρ, so it contains the attractor-bias and circular log-Jensen terms
+            that "exact"/"taylor" ignore; its implied Technical_cSTD is
+            √(Data_cSTD² − σ̂²) (NaN if σ̂ > Data_cSTD, flagged by ``deconv_neg_tech``).
+            The group phase μ_b is chosen by ``use_circular_mean`` exactly
             as for the other methods. The output gains ``deconv_flag``,
             ``deconv_f_mu_h`` (√f(μ_b), h), ``deconv_f2_mu`` (f''(μ_b), dimensionless),
             ``deconv_mu_h`` and ``Technical_cSTD_floor`` (√f(μ_b), h, the single-point
@@ -1289,9 +1296,11 @@ class Scritmo(
                 f"Unknown sigma_tech_method '{sigma_tech_method}'. Use 'simulation', "
                 "'harmonic' or 'deconvolution' ('cramer_rao' was removed)."
             )
-        if sigma_tech_method == "deconvolution" and deconv_form not in ("exact", "taylor"):
+        if sigma_tech_method == "deconvolution" and deconv_form not in (
+            "exact", "taylor", "vector"
+        ):
             raise ValueError(
-                f"deconv_form must be 'exact' or 'taylor', got {deconv_form!r}"
+                f"deconv_form must be 'exact', 'taylor' or 'vector', got {deconv_form!r}"
             )
 
         if context_col is None:
