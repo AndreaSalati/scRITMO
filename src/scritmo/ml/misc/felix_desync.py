@@ -21,7 +21,7 @@ Integration with scRITMO
 ------------------------
 ::
 
-    from scritmo.ml.sigma_marginal import estimate_sigma_from_data
+    from scritmo.ml.misc.felix_desync import estimate_sigma_from_data
 
     # After training a ContextModel:
     result = estimate_sigma_from_data(

@@ -34,7 +34,6 @@ from .simulations.simulate_populations import (
     simulate_cell_populations,
     simulate_technical_grid,
 )
-from .ensemble import EnsembleMixin
 from .unspliced.unspliced_deg import UnsplicedMixin
 from .unspliced.fisher import FisherUncertaintyMixin
 from .analysis_utils import (
@@ -45,7 +44,6 @@ from .analysis_utils import (
 )
 from .deconvolution import aggregate_technical_deconvolution
 from .genome_fit import GenomeFitMixin
-from .desync_mixin import DesynchronyMixin
 from .null_model import NullModelMixin
 
 circSTD = partial(cSTD, adjust=True)
@@ -53,8 +51,6 @@ circSTD = partial(cSTD, adjust=True)
 
 class Scritmo(
     nn.Module,
-    DesynchronyMixin,
-    EnsembleMixin,
     UnsplicedMixin,
     MarginalizationMixin,
     FisherUncertaintyMixin,
@@ -75,8 +71,6 @@ class Scritmo(
     The model is a composition of ``nn.Module`` and several mixins, each adding a
     family of methods:
       - ``MarginalizationMixin``  — the marginal likelihood / training loss.
-      - ``DesynchronyMixin``      — marginal-likelihood desynchrony (``estimate_sigma``).
-      - ``EnsembleMixin``         — feature-bagged (gene-subset) ensembles.
       - ``UnsplicedMixin``        — joint spliced/unspliced modeling.
       - ``FisherUncertaintyMixin``— Fisher/Cramér–Rao per-cell phase uncertainty.
       - ``GenomeFitMixin``        — genome-wide gene refitting at fixed phases.
@@ -482,11 +476,6 @@ class Scritmo(
 
         Nb = ll_xcg.shape[0]
 
-        # extra: to be removed later
-        ll_e_xc = torch.zeros((self.Nx, self.Nc), dtype=torch.float32, device=y.device)[
-            :, indices
-        ]
-
         # cells priors
         loss = tt(0.0, device=self.dev)
 
@@ -500,7 +489,7 @@ class Scritmo(
             l_prior_xc = self.cell_prior(indices)
             # Expected marginalized log likelihood
             l_c, max_c, l_xc = self.marginalize_theta(
-                ll_xc, l_prior_xc, ll_e_xc, method=self.method, return_integrand=True
+                ll_xc, l_prior_xc, method=self.method, return_integrand=True
             )
             loss_like = -self.log_like_loss(l_c, max_c)
 

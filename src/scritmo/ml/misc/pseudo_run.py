@@ -14,7 +14,6 @@ import scritmo as sr
 from scritmo import w, rh, ccg, pseudobulk
 from ..context_model import ContextModel
 from ..utils import assemble_mp
-from ..discrete_MI import MI
 # TODO: train_deterministic_tempo function not found in the codebase, may need to be implemented or imported from elsewhere
 
 
