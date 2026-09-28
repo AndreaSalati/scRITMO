@@ -7,6 +7,7 @@ from scipy.stats import chi2
 from scritmo import Beta, optimal_shift, w, rh
 import pandas as pd
 from ..utils import harmonic_dm_torch, nmp
+from ..model.likelihood import grid_design
 import scritmo as sr
 
 
@@ -593,9 +594,7 @@ class UnsplicedMixin:
 
         if n_theta is not None:
             phi_x_new = self.phase_grid(n_theta, device=self.dev)
-            X_new = harmonic_dm_torch(phi_x_new, self.nh, False)
-            X = X_new.unsqueeze(1).expand(n_theta, self.Nc, self.nh * 2)
-            X = X[:, indices, :]
+            X = grid_design(phi_x_new, self.nh, self.Nc)[:, indices, :]
         else:
             X = self.X[:, indices, :]
 

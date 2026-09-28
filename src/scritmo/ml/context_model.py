@@ -2,12 +2,12 @@ import numpy as np
 import torch
 from torch import tensor as tt
 from torch import nn
-from sklearn.preprocessing import OneHotEncoder
-from .marginalization import MarginalizationMixin
 import anndata
 import pandas as pd
+from .model import likelihood as lik
+from . import marginalization as _marg
+from .model.likelihood import compute_nb_params, compute_poisson_rate
 from .utils import (
-    harmonic_dm_torch,
     set_context_mode,
     nmp,
     resolve_device,
@@ -45,7 +45,6 @@ from .null_model import NullModelMixin
 class Scritmo(
     nn.Module,
     UnsplicedMixin,
-    MarginalizationMixin,
     FisherUncertaintyMixin,
     GenomeFitMixin,
     NullModelMixin,
@@ -63,7 +62,6 @@ class Scritmo(
 
     The model is a composition of ``nn.Module`` and several mixins, each adding a
     family of methods:
-      - ``MarginalizationMixin``  — the marginal likelihood / training loss.
       - ``UnsplicedMixin``        — joint spliced/unspliced modeling.
       - ``FisherUncertaintyMixin``— Fisher/Cramér–Rao per-cell phase uncertainty.
       - ``GenomeFitMixin``        — genome-wide gene refitting at fixed phases.
@@ -367,16 +365,7 @@ class Scritmo(
         """
         n = self.Nx if n_theta is None else n_theta
         # getattr: models pickled before phase_range existed are full-circle
-        phase_range = getattr(self, "phase_range", None)
-        if phase_range is None:
-            return torch.linspace(
-                0, 2 * torch.pi, n + 1, dtype=torch.float32, device=device
-            )[:-1]
-        lo, hi = phase_range
-        step = (hi - lo) / n
-        return lo + step * (
-            torch.arange(n, dtype=torch.float32, device=device) + 0.5
-        )
+        return lik.phase_grid(n, getattr(self, "phase_range", None), device=device)
 
     @classmethod
     def from_params_g(
@@ -559,9 +548,7 @@ class Scritmo(
                 # n_theta, keep the model's own grid size (y then carries Nx rows).
                 n_grid = n_theta if n_theta is not None else self.Nx
                 phi_x_tensor = self.phase_grid(n_grid, device=self.m_g.device)
-                X_tensor = harmonic_dm_torch(phi_x_tensor, self.nh, False)
-                X_tensor = X_tensor.unsqueeze(1).expand(n_grid, self.Nc, self.nh * 2)
-                self.register_buffer("X", X_tensor)
+                self.register_buffer("X", lik.grid_design(phi_x_tensor, self.nh, self.Nc))
                 # adjust dm
                 self.register_buffer("dm", self.design_matrix(np.ones(self.Nc)))
 
@@ -684,20 +671,14 @@ class Scritmo(
         xc (where x is the phase and c the cell index)
         and it normalizes w.r.t. the x variable
         """
-        max_c = torch.max(ll_xc, dim=0, keepdim=True).values
-        # numerical stability
-        ll_xc = ll_xc - max_c
-        l_xc = torch.exp(ll_xc)
-
-        phase_width = getattr(self, "phase_width", 2 * np.pi)
-        if method == "simpson" and getattr(self, "phase_range", None) is not None:
-            method = "sum"  # the periodic Simpson rule is wrong on an arc
-        if method == "simpson":
-            l_c = self.vectorized_simpson(l_xc, self.phi_x)
-        elif method == "sum":
-            l_c = torch.sum(l_xc, dim=0) * (phase_width / self.Nx)
-
-        return l_xc / l_c
+        return lik.normalize_log_dist(
+            ll_xc,
+            method,
+            self.phi_x,
+            getattr(self, "phase_width", 2 * np.pi),
+            self.Nx,
+            on_arc=getattr(self, "phase_range", None) is not None,
+        )
 
     def get_parameter_dataframe(self, unspliced=False):
         """
@@ -813,29 +794,7 @@ class Scritmo(
         Returns:
             torch.Tensor: The resulting one-hot encoded tensor.
         """
-        if vec is None:
-            # no vector passed -> one global context
-            return torch.ones((self.Nc, 1), dtype=torch.float32, device=self.dev)
-
-        # Reshape the input vector for the encoder
-        data = np.array(vec).reshape(-1, 1)
-
-        # Initialize the encoder
-        if all_categories is not None:
-            encoder = OneHotEncoder(
-                categories=[all_categories],
-                sparse_output=False,
-                handle_unknown="ignore",
-            )
-        else:
-            # Default behavior: infer categories directly from the input 'vec'
-            encoder = OneHotEncoder(sparse_output=False)
-
-        # Create the one-hot encoded matrix
-        one_hot_matrix = encoder.fit_transform(data)
-
-        # Convert to a PyTorch tensor
-        return torch.tensor(one_hot_matrix, dtype=torch.float32, device=self.dev)
+        return lik.one_hot(vec, self.Nc, self.dev, all_categories)
 
     def model_formula(self, indices=slice(None), counts=None, n_theta=None):
         """
@@ -855,9 +814,7 @@ class Scritmo(
 
         if n_theta is not None:
             phi_x_new = self.phase_grid(n_theta, device=self.dev)
-            X_new = harmonic_dm_torch(phi_x_new, self.nh, False)
-            X = X_new.unsqueeze(1).expand(n_theta, self.Nc, self.nh * 2)
-            X = X[:, indices, :]
+            X = lik.grid_design(phi_x_new, self.nh, self.Nc)[:, indices, :]
         else:
             X = self.X[:, indices, :]
 
@@ -888,26 +845,7 @@ class Scritmo(
             indices=indices, counts=counts, n_theta=n_theta
         )
 
-        # --- Select distribution based on the noise model ---
-        if self.noise_model == "nb":
-            # Use JIT-compiled NB parameter computation
-            r, p = compute_nb_params(E_xcg, disp, counts)
-            return torch.distributions.NegativeBinomial(total_count=r, probs=p)
-
-        elif self.noise_model == "poisson":
-            # Use JIT-compiled Poisson rate computation
-            rate = compute_poisson_rate(E_xcg, counts)
-            return torch.distributions.Poisson(rate=rate)
-
-        elif self.noise_model == "gaussian":
-            # Gaussian distribution with mean E_xcg and fixed std dev
-            std_dev = 1.0
-            return torch.distributions.Normal(loc=E_xcg, scale=std_dev)
-
-        else:
-            raise NotImplementedError(
-                f"Noise model '{self.noise_model}' is not implemented."
-            )
+        return lik.count_distribution(self.noise_model, E_xcg, disp, counts)
 
     def simulate_cell_populations(
         self,
@@ -1487,6 +1425,47 @@ class Scritmo(
         out["deconv_sigma_h"] = out["deconv_sigma"] * rh
         return out
 
+    # ------------------------------------------------------------------
+    # marginalization over the phase grid (maths in model/likelihood.py)
+    # ------------------------------------------------------------------
+
+    vectorized_simpson = staticmethod(lik.periodic_simpson)
+    # legacy, used only by the unmaintained misc/svi code
+    marginalize_theta_svi = _marg.MarginalizationMixin.marginalize_theta_svi
+    log_like_loss = staticmethod(lik.log_like_loss)
+
+    def _phase_width(self):
+        # getattr: models pickled before phase_range existed are full-circle
+        return getattr(self, "phase_width", 2 * torch.pi)
+
+    def marginalize_theta(
+        self, ll_xc_, log_prior, method="simpson", return_integrand=False
+    ):
+        r"""
+        Log marginal likelihood per cell, :math:`\int P(D|\theta) P(\theta) d\theta`,
+        integrated over the phase grid (Simpson or plain sum). Returns
+        ``(l_c, max_c)``, plus the integrand ``l_xc`` if ``return_integrand``.
+        """
+        l_c, max_c, l_xc = lik.marginalize(
+            ll_xc_, log_prior, method, self.phi_x, self._phase_width(), self.Nx
+        )
+        if return_integrand:
+            return l_c, max_c, l_xc
+        return l_c, max_c
+
+    def cell_prior(self, indices=None, n_theta=None):
+        """
+        Log prior over the phase grid: flat on the support, or a Von-Mises around
+        each cell's batch phase in batch mode. ``n_theta`` is ignored.
+        """
+        if indices is None:
+            indices = slice(None)
+        if self.batch_mode:
+            return lik.batch_log_prior(
+                self.phi_x, self.phi_b, self.kappa_b, self.dm_batch[indices, :]
+            )
+        return lik.flat_log_prior(self._phase_width())
+
     def X_matrix(self, fixed_cell_mode, n_theta=None, mp=None):
         """
         Build the harmonic design matrix over the phase axis, and set ``Nx``.
@@ -1519,7 +1498,7 @@ class Scritmo(
                 )
 
             self.register_buffer("phi_c", phi_c)
-            X_tensor = harmonic_dm_torch(self.phi_c, self.nh, False)
+            X_tensor = lik.harmonic_dm_torch(self.phi_c, self.nh, False)
             self.Nx = 1
             return X_tensor.unsqueeze(0)
 
@@ -1531,36 +1510,7 @@ class Scritmo(
             self.register_buffer("phi_x", phi_x_tensor)
 
             # Nx Np -> Nx Nc Np
-            X_tensor = harmonic_dm_torch(phi_x_tensor, self.nh, False)
-            X_tensor = X_tensor.unsqueeze(1).expand(n_theta, self.Nc, self.nh * 2)
-            return X_tensor
-
-
-def compute_nb_params(
-    E_xcg: torch.Tensor, disp: torch.Tensor, counts: torch.Tensor, eps: float = 1e-6
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Negative Binomial parameter computation (r, p) from the log-mean.
-
-    Args:
-        E_xcg: Expected mean values (before exp transform)
-        disp: Dispersion parameter
-        counts: Library size counts
-        eps: Epsilon for numerical stability
-
-    Returns:
-        r: Total count parameter
-        p: Success probability parameter (clamped)
-    """
-    E_xcg_exp = torch.exp(E_xcg) * counts
-    r = 1.0 / disp
-    p = disp * E_xcg_exp / (1.0 + disp * E_xcg_exp)
-    p = p.clamp(min=eps, max=1.0 - eps)
-    return r, p
-
-
-def compute_poisson_rate(E_xcg: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
-    return torch.exp(E_xcg) * counts
+            return lik.grid_design(phi_x_tensor, self.nh, self.Nc)
 
 
 # Backward-compatible alias (historical name). Keep for old pickles & existing imports.
