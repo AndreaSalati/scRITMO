@@ -71,17 +71,19 @@ def estimate_phase_desynchrony(
     biological desynchrony with technical (estimation) noise. This method
     separates the two by comparing the real spread against a "technical twin"
     whose only spread is estimation noise, then subtracting in quadrature
-    inside :func:`desync_results`. End to end it:
+    inside :func:`desync_results`. Available as the model method
+    ``Scritmo.estimate_phase_desynchrony`` (same arguments) and, with explicit
+    ``adata.obs`` keys, :meth:`Scritmo.desynchrony`. End to end it:
 
     1. Builds a per-cell results DataFrame from the real data
-       (:meth:`create_results_df`), optionally filtering cells by posterior
+       (:func:`create_results_dataframe`), optionally filtering cells by posterior
        phase uncertainty (``post_std_threshold``).
     2. Estimates the technical floor with one of two methods (``sigma_tech_method``):
          - "simulation": simulate a perfectly-synchronized population
            (``kappa=inf``) with this model and re-infer phases, so the recovered
-           spread is purely technical (:meth:`simulate_cell_populations`).
+           spread is purely technical (:func:`simulate_cell_populations`).
          - "harmonic": run the synchronized twin across a GRID of common phases
-           (:meth:`simulate_technical_grid`), fit the 12h structure of σ_tech²(φ)
+           (:func:`simulate_technical_grid`), fit the 12h structure of σ_tech²(φ)
            with a 2-harmonic model, then evaluate that fitted floor at each real
            cell's inferred phase and average within each replicate. Corrects the
            single-φ "simulation" floor for its known phase dependence (large near

@@ -1311,102 +1311,10 @@ class Scritmo(nn.Module, UnsplicedMixin):
             allow_flip=allow_flip,
         )
 
-    def estimate_phase_desynchrony(
-        self,
-        adata,
-        ext_phase: None | np.ndarray = None,
-        # --- Shared Data/Column Arguments ---
-        context_col: str | None = None,
-        sample_col: str = "sample_name",
-        ext_time_col: str = "ZTmod",
-        layer: str = "spliced",
-        post_estimator: str = "post_mode",
-        # --- Simulation Arguments (simulate_cell_populations) ---
-        n_cells: int | None = None,
-        period: float = 24.0,
-        device: str = "cuda",
-        n_epochs_training: int = 0,
-        n_replicates_sim: int | None = None,
-        library_size_vec=None,
-        n_sim_runs: int = 5,
-        posterior_cell_chunk: int | None = None,
-        # --- Real Data Arguments (create_results_df) ---
-        other_obs_cols: list = [],
-        allow_flip: bool = False,
-        # --- Desynchrony Calculation Arguments (desync_results) ---
-        group_cols: list | None = None,
-        disp_function=cSTD,
-        metrics: dict | None = None,
-        n_replicates_real: int | None = None,
-        seed_real: int = 42,
-        seed_sim: int | None = None,
-        # --- Technical floor method ---
-        sigma_tech_method: str = "simulation",
-        # --- Harmonic floor arguments ---
-        n_grid: int = 24,
-        n_cells_per_gridpoint: int = 1000,
-        return_harmonic_diagnostics: bool = False,
-        harmonic_orders=(1, 2, 3),
-        harmonic_eval: str = "sample",
-        # --- Deconvolution floor arguments ---
-        deconv_form: str = "exact",
-        return_deconv_diagnostics: bool = False,
-        tech_grid=None,
-        # --- Cell filtering / weighting ---
-        post_std_threshold: float = np.inf,
-        weight_by_post_std: bool = False,
-        # --- Simulation mean estimation ---
-        use_circular_mean: bool = False,
-        # --- Over-subtraction policy ---
-        clamp_bio_variance: bool = True,
-    ):
-        """
-        Estimate biological phase desynchrony, correcting for the technical floor.
-
-        See :func:`scritmo.ml.desync.estimate_phase_desynchrony` for the full
-        description of the method and of every argument; this method forwards
-        to it unchanged. :meth:`desynchrony` is the same pipeline with explicit
-        ``adata.obs`` keys.
-        """
-        return _estimate_phase_desynchrony(
-            self,
-            adata,
-            ext_phase=ext_phase,
-            context_col=context_col,
-            sample_col=sample_col,
-            ext_time_col=ext_time_col,
-            layer=layer,
-            post_estimator=post_estimator,
-            n_cells=n_cells,
-            period=period,
-            device=device,
-            n_epochs_training=n_epochs_training,
-            n_replicates_sim=n_replicates_sim,
-            library_size_vec=library_size_vec,
-            n_sim_runs=n_sim_runs,
-            posterior_cell_chunk=posterior_cell_chunk,
-            other_obs_cols=other_obs_cols,
-            allow_flip=allow_flip,
-            group_cols=group_cols,
-            disp_function=disp_function,
-            metrics=metrics,
-            n_replicates_real=n_replicates_real,
-            seed_real=seed_real,
-            seed_sim=seed_sim,
-            sigma_tech_method=sigma_tech_method,
-            n_grid=n_grid,
-            n_cells_per_gridpoint=n_cells_per_gridpoint,
-            return_harmonic_diagnostics=return_harmonic_diagnostics,
-            harmonic_orders=harmonic_orders,
-            harmonic_eval=harmonic_eval,
-            deconv_form=deconv_form,
-            return_deconv_diagnostics=return_deconv_diagnostics,
-            tech_grid=tech_grid,
-            post_std_threshold=post_std_threshold,
-            weight_by_post_std=weight_by_post_std,
-            use_circular_mean=use_circular_mean,
-            clamp_bio_variance=clamp_bio_variance,
-        )
+    # the pipeline function itself: `self` binds to its `model` argument, so the
+    # signature, defaults and docstring are exactly those of
+    # scritmo.ml.desync.estimate_phase_desynchrony
+    estimate_phase_desynchrony = _estimate_phase_desynchrony
 
     _attach_deconvolution = staticmethod(_attach_deconvolution)
 
