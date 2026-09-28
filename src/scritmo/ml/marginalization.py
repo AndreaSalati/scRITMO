@@ -1,11 +1,7 @@
 import torch
 from .misc.power_spherical.power_spherical import (
-    log_power_spherical_unnorm,
     log_von_mises,
 )
-import torch
-import matplotlib.pyplot as plt
-from .utils import nmp
 
 
 def vectorized_simpson(y_values: torch.Tensor, h: float) -> torch.Tensor:
@@ -36,63 +32,6 @@ def vectorized_simpson(y_values: torch.Tensor, h: float) -> torch.Tensor:
     integrals = (h / 3.0) * torch.sum(weighted_y, dim=0)
 
     return integrals
-
-
-def marginalize_theta_core(
-    ll_xc: torch.Tensor,
-    log_prior: torch.Tensor,
-    phi_x: torch.Tensor,
-    method: str,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """
-    JIT-compiled core marginalization computation.
-
-    Returns:
-        l_c: Marginalized likelihood
-        max_c: Max values for log-sum-exp
-        l_xc: Exponentiated likelihoods
-    """
-    # Add prior
-    ll_xc_combined = ll_xc + log_prior
-
-    # Log-sum-exp trick
-    max_c = torch.max(ll_xc_combined, dim=0, keepdim=True).values
-    ll_xc_stable = ll_xc_combined - max_c
-    l_xc = torch.exp(ll_xc_stable)
-
-    # Integration
-    if method == "simpson":
-        h = 2.0 * 3.141592653589793 / float(ll_xc.shape[0])  # 2*pi/Nx
-        l_c = vectorized_simpson(l_xc, h)
-    else:  # sum
-        l_c = torch.sum(l_xc, dim=0) * (2.0 * 3.141592653589793 / float(ll_xc.shape[0]))
-
-    return l_c, max_c, l_xc
-
-
-def normalize_log_dist_jit(ll_xc: torch.Tensor, method: str, Nx: int) -> torch.Tensor:
-    """
-    JIT-compiled log distribution normalization.
-
-    Args:
-        ll_xc: Log likelihood tensor, shape (Nx, ...)
-        method: "simpson" or "sum"
-        Nx: Number of grid points
-
-    Returns:
-        Normalized distribution
-    """
-    max_c = torch.max(ll_xc, dim=0, keepdim=True).values
-    ll_xc_stable = ll_xc - max_c
-    l_xc = torch.exp(ll_xc_stable)
-
-    if method == "simpson":
-        h = 2.0 * 3.141592653589793 / float(Nx)
-        l_c = vectorized_simpson(l_xc, h)
-    else:  # sum
-        l_c = torch.sum(l_xc, dim=0) * (2.0 * 3.141592653589793 / float(Nx))
-
-    return l_xc / l_c
 
 
 class MarginalizationMixin:

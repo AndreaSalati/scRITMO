@@ -599,45 +599,6 @@ def harmonic_floor_peaks_hours(coef, n=720):
     return sorted(float(grid[i] * rh) for i in idx)
 
 
-def fit_harmonic_floor(x_phase, y_var):
-    """OLS fit of the 12h (2nd-harmonic) technical floor  y(φ) = m + a·cos(2φ) + b·sin(2φ).
-
-    Linear in (m, a, b), so an ordinary least-squares fit on the design matrix
-    [1, cos(2φ), sin(2φ)] denoises the noisy per-gridpoint Monte-Carlo variances into 3
-    parameters and captures the expected 12h structure.
-
-    Parameters
-    ----------
-    x_phase : array-like
-        Grid phases (radians), in the same frame as the phases F will be evaluated at.
-    y_var : array-like
-        σ_tech² at each grid phase (variance, i.e. cSTD²).
-
-    Returns
-    -------
-    (m, a, b) : tuple of float
-        Mesor and 2nd-harmonic cosine/sine coefficients of the variance curve.
-    """
-    x_phase = np.asarray(x_phase, dtype=float)
-    y_var = np.asarray(y_var, dtype=float)
-    D = np.column_stack(
-        [np.ones_like(x_phase), np.cos(2 * x_phase), np.sin(2 * x_phase)]
-    )
-    coeffs, *_ = np.linalg.lstsq(D, y_var, rcond=None)
-    m, a, b = float(coeffs[0]), float(coeffs[1]), float(coeffs[2])
-    return m, a, b
-
-
-def eval_harmonic_floor(theta, m, a, b):
-    """Evaluate the fitted floor F(θ) = m + a·cos(2θ) + b·sin(2θ) (σ_tech², rad²).
-
-    Clipped at 0 so fit noise can't yield a negative variance.
-    """
-    theta = np.asarray(theta, dtype=float)
-    F = m + a * np.cos(2 * theta) + b * np.sin(2 * theta)
-    return np.clip(F, 0.0, None)
-
-
 def aggregate_technical_harmonic(
     df_grid: pd.DataFrame,
     df_real: pd.DataFrame,
@@ -822,43 +783,3 @@ def append_first_timepoint_periodic(df_desync, time_col: str = "ext_time_hours")
     return df_periodic
 
 
-def summarize_desync_results_one_ct(
-    df_desync, plot=True, context: str = "", palette="Set1"
-):
-    weighted_mean_technical_R = np.average(
-        df_desync["Technical_R"], weights=df_desync["group_size"]
-    )
-    weighted_mean_data_R = np.average(
-        df_desync["Data_R"], weights=df_desync["group_size"]
-    )
-
-    final_technical_cSTD = sr.R2cstd(weighted_mean_technical_R) * rh
-    final_data_cSTD = sr.R2cstd(weighted_mean_data_R) * rh
-    final_bio_cSTD = np.sqrt(final_data_cSTD**2 - final_technical_cSTD**2)
-
-    print("Final Technical cSTD (hours):", f"{final_technical_cSTD:.2f}h")
-    print("Final Data cSTD (hours):", f"{final_data_cSTD:.2f}h")
-    print("Final Bio cSTD (hours):", f"{final_bio_cSTD:.2f}h")
-
-    if plot:
-        equation_string2 = (
-            "\n$\\sigma_{Bio} = \\sqrt{\\sigma_{Data}^2 - \\sigma_{Technical}^2}$"
-        )
-        plt.figure(figsize=(6, 5))
-        bar_labels = [r"$\sigma_{Technical}$", r"$\sigma_{Bio}$", r"$\sigma_{Data}$"]
-        bar_values = [final_technical_cSTD, final_bio_cSTD, final_data_cSTD]
-        ax = sns.barplot(x=bar_labels, y=bar_values, hue=bar_labels, palette=palette)
-
-        # Remove top frame
-        ax.spines["top"].set_visible(False)
-
-        # Add value labels on top of bars
-        for i, v in enumerate(bar_values):
-            ax.text(i, v + 0.05, f"{v:.2f}h", ha="center", va="bottom", fontsize=12)
-
-        plt.ylabel("Circular STD [h]")
-        plt.title(f"Desynchrony summary {context} \n" + equation_string2)
-        plt.tight_layout()
-        plt.show()
-
-    return final_technical_cSTD, final_bio_cSTD, final_data_cSTD

@@ -1,16 +1,13 @@
 import numpy as np
 import torch
 from torch import tensor as tt
-from tqdm import tqdm
 from torch import nn
 from sklearn.preprocessing import OneHotEncoder
-from functools import partial
 from .marginalization import MarginalizationMixin
 import anndata
 import pandas as pd
 from .utils import (
     harmonic_dm_torch,
-    circ_std_P,
     set_context_mode,
     nmp,
     resolve_device,
@@ -23,13 +20,12 @@ from scritmo import (
     Beta,
     compute_posterior_statistics,
     rh,
-    w,
     optimal_shift,
     compute_posterior_mode,
     mean_SE,
     mean_AE,
 )
-from scritmo import median_dispersion, cSTD, cstd2R
+from scritmo import cSTD, cstd2R
 from .simulations.simulate_populations import (
     simulate_cell_populations,
     simulate_technical_grid,
@@ -39,14 +35,11 @@ from .unspliced.fisher import FisherUncertaintyMixin
 from .analysis_utils import (
     create_results_dataframe,
     desync_results,
-    desync_means,
     aggregate_technical_harmonic,
 )
 from .deconvolution import aggregate_technical_deconvolution
 from .genome_fit import GenomeFitMixin
 from .null_model import NullModelMixin
-
-circSTD = partial(cSTD, adjust=True)
 
 
 class Scritmo(
