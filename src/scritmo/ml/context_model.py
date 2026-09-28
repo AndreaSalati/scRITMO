@@ -5,6 +5,7 @@ from torch import nn
 import anndata
 import pandas as pd
 from .model import likelihood as lik
+from .model import parameters as par
 from . import marginalization as _marg
 from .model.likelihood import compute_nb_params, compute_poisson_rate
 from .utils import (
@@ -27,7 +28,6 @@ from scritmo import (
 )
 from scritmo import cSTD, cstd2R
 from .unspliced.unspliced_deg import UnsplicedMixin
-from .unspliced.fisher import FisherUncertaintyMixin
 from .desync.results import create_results_dataframe
 from .desync.technical_sim import (
     simulate_cell_populations,
@@ -44,7 +44,6 @@ from .null_model import NullModelMixin
 class Scritmo(
     nn.Module,
     UnsplicedMixin,
-    FisherUncertaintyMixin,
     GenomeFitMixin,
     NullModelMixin,
 ):
@@ -61,8 +60,8 @@ class Scritmo(
 
     The model is a composition of ``nn.Module`` and several mixins, each adding a
     family of methods:
-      - ``UnsplicedMixin``        — joint spliced/unspliced modeling.
-      - ``FisherUncertaintyMixin``— Fisher/Cramér–Rao per-cell phase uncertainty.
+      - ``UnsplicedMixin``        — joint spliced/unspliced modeling, including the
+        Fisher/Cramér–Rao uncertainties of its parameters.
       - ``GenomeFitMixin``        — genome-wide gene refitting at fixed phases.
       - ``NullModelMixin``        — flat-amplitude null NB fit for comparison.
 
@@ -197,7 +196,7 @@ class Scritmo(
         self.context_u = np.unique(context)
         self.genes = mp["params_g"].index.values
         self.fix_phase = fix_phase
-        self.max_amp = 8 / (2 * np.log2(np.e))  # log2fc of 8
+        self.max_amp = par.MAX_AMP  # log2fc of 8
         self.noise_model = noise_model
         self.fix_disp_val = fix_disp_val
         self.log_amp_fn = log_amp_fn
@@ -254,14 +253,7 @@ class Scritmo(
 
         # Original amplitude values
         amp_values = tt(mp["params_g"]["amp"].values, dtype=torch.float32)
-        if log_amp_fn == "logit":
-            safe_amp = torch.clamp(amp_values, min=1e-2, max=self.max_amp - 1e-2)
-            # The ratio is now guaranteed to be in a safe sub-interval of (0, 1)
-            log_amp = torch.logit(safe_amp / self.max_amp)
-            self.log_amp = nn.Parameter(log_amp)
-        elif log_amp_fn == "log":
-            log_amp = torch.log(amp_values)
-            self.log_amp = nn.Parameter(log_amp)
+        self.log_amp = nn.Parameter(par.raw_amplitude(amp_values, log_amp_fn, self.max_amp))
 
         # Base parameters
         if fix_phase:
@@ -681,102 +673,47 @@ class Scritmo(
 
     def get_parameter_dataframe(self, unspliced=False):
         """
-        Create a DataFrame with harmonic coefficients for each gene.
-        It is the core parameters shared by all celltypes.
+        The fitted gene parameters as a ``Beta`` table, one row per gene.
 
-        Parameters
-        ----------
-        genes : list, optional
-            useless, It's there just to not brake previous code.
+        Columns: ``a_0`` (log-mesor), ``a_i``/``b_i`` per harmonic, the derived
+        ``amp``/``phase`` columns and ``disp``. Same table as :attr:`params_`.
 
-        Returns
-        -------
-        pd.DataFrame
-            DataFrame with one row per gene and columns:
-            'a_0', 'a_1', 'b_1', ..., 'a_n', 'b_n'
+        Args:
+            unspliced: Not supported (the per-gene unspliced table is
+                :meth:`extract_params_u`); kept so old call sites fail clearly.
         """
-        # Convert tensors to numpy arrays
-
         if unspliced:
-            a_0_np = nmp(self.m_u_g).squeeze()
-            ab_np = nmp(self._get_ab_u()).T
-            gene_names = self.genes
-        else:
-            a_0_np = nmp(self.m_g).squeeze()
-            ab_np = nmp(self._get_ab()).T
-            # ab_np = self.ab.detach().cpu().numpy().squeeze().T
-            gene_names = self.genes
-
-        # Determine number of harmonics
-        n_harmonics = ab_np.shape[1] // 2
-
-        # Create column names
-        col_names = ["a_0"] + [
-            f"{c}_{i+1}" for i in range(n_harmonics) for c in ("a", "b")
-        ]
-
-        # Concatenate a_0 and ab
-        full_array = np.concatenate([a_0_np[:, None], ab_np], axis=1)
-
-        # Create the DataFrame
-        params_g = pd.DataFrame(full_array, columns=col_names, index=gene_names)
-        params_g = Beta(params_g)
-        params_g.get_amp(inplace=True)
-        params_g["disp"] = nmp(self.log_disp.exp()).squeeze()
-
-        return params_g
+            raise NotImplementedError(
+                "get_parameter_dataframe(unspliced=True) is not supported; "
+                "use extract_params_u() for the unspliced parameters."
+            )
+        return par.parameter_table(self.m_g, self._get_ab(), self.genes, self.log_disp)
 
     def _amp_s(self):
-        if self.log_amp_fn == "logit":
-            amp = torch.sigmoid(self.log_amp) * self.max_amp
-            return amp
-        elif self.log_amp_fn == "log":
-            amp = torch.exp(self.log_amp)
-            return amp
-        else:
-            raise ValueError(
-                f"Unknown log_amp_fn '{self.log_amp_fn}'. Use 'logit' or 'log'."
-            )
+        return par.amplitude(self.log_amp, self.log_amp_fn, self.max_amp)
 
     def _get_ab(self):
-        amp = self._amp_s()
-        cos = amp * torch.cos(self.acrophase).unsqueeze(0)
-        sin = amp * torch.sin(self.acrophase).unsqueeze(0)
-        ab = torch.cat([cos, sin], dim=0)
-        return ab
+        return par.harmonic_coefficients(self._amp_s(), self.acrophase)
 
     def get_parameter_dataframe_context(self, gene_names=None):
         """
         LEGACY. Per-context gene parameters, one Beta table per context label.
 
-        Calls :meth:`get_parameter_dataframe` and folds in the context-dependent
-        parts: the intercept gains ``m_yg[i]`` and the harmonic coefficients and
+        Folds the context-dependent parts into :meth:`get_parameter_dataframe`:
+        the intercept gains ``m_yg[i]`` and the harmonic coefficients and
         amplitude are scaled by ``exp(log_lambda_y[i])``. Under the default
         ``context_mode="none"`` those terms are frozen at their zero init, so every
         returned table is identical to :meth:`get_parameter_dataframe`.
 
         Args:
-            gene_names: Ignored (kept so older call sites keep working); the gene
-                names always come from the parameter table itself.
+            gene_names: Ignored (kept so older call sites keep working).
 
         Returns:
             dict mapping each label in ``self.context_u`` to a ``Beta`` table.
         """
-        params_g = self.get_parameter_dataframe()
-        gene_names = params_g.index.values
-
-        params_y = {}
-        for i, ct in enumerate(self.context_u):
-            par = params_g.copy()
-            par.a_0 += self.m_yg[i, :].cpu().detach().numpy()
-            col_names = par.get_ab_column_names(keep_a_0=False)
-            lambda_y = nmp(self.log_lambda_y[i].exp().squeeze())
-            par[col_names] = par[col_names] * lambda_y
-            par["amp"] = par["amp"] * lambda_y
-            par.get_cartesian(inplace=True)
-            params_y[ct] = par
-
-        return params_y
+        return par.context_parameter_tables(
+            self.get_parameter_dataframe(), self.context_u, self.m_yg, self.log_lambda_y
+        )
 
     def design_matrix(self, vec, all_categories=None):
         """
