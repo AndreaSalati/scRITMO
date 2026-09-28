@@ -4,7 +4,6 @@ from .warmup import warmup_and_train
 # from .model_guide import guide_tempo, model_tempo
 
 # from .svi import SVI_model, get_svi_marginalized_posterior
-from .discrete_MI import MI
 from .context_model import Scritmo, ContextModel
 from .unspliced.unspliced_deg import unspliced_lrt, refine_mle
 from .utils import *
@@ -17,11 +16,4 @@ from .analysis_utils import (
     create_results_dataframe,
     desync_means,
     desync_results,
-)
-from .sigma_marginal import (
-    fit_marginal_mle,
-    fit_sigma_only,
-    estimate_sigma_from_data,
-    marginal_loglik,
-    nb_logpmf_r,
 )

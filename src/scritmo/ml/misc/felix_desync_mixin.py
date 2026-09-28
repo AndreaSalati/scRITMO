@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .sigma_marginal import (
+from .felix_desync import (
     fit_sigma_only,
     fit_marginal_mle,
 )

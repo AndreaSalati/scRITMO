@@ -41,7 +41,6 @@ def vectorized_simpson(y_values: torch.Tensor, h: float) -> torch.Tensor:
 def marginalize_theta_core(
     ll_xc: torch.Tensor,
     log_prior: torch.Tensor,
-    ll_e_xc: torch.Tensor,
     phi_x: torch.Tensor,
     method: str,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -53,8 +52,8 @@ def marginalize_theta_core(
         max_c: Max values for log-sum-exp
         l_xc: Exponentiated likelihoods
     """
-    # Add prior and extra term
-    ll_xc_combined = ll_xc + log_prior + ll_e_xc
+    # Add prior
+    ll_xc_combined = ll_xc + log_prior
 
     # Log-sum-exp trick
     max_c = torch.max(ll_xc_combined, dim=0, keepdim=True).values
@@ -135,7 +134,7 @@ class MarginalizationMixin:
         return vectorized_simpson(y_values, float(h))
 
     def marginalize_theta(
-        self, ll_xc_, log_prior, ll_e_xc, method="simpson", return_integrand=False
+        self, ll_xc_, log_prior, method="simpson", return_integrand=False
     ):
         r"""
         This function gives the log pf the marginal distribution P(D, beta)
@@ -146,8 +145,7 @@ class MarginalizationMixin:
         """
 
         # log (L(D|theta, beta) * P(theta))
-        # ADD HERE ll_e_xc already summed over genes
-        ll_xc = ll_xc_ + log_prior + ll_e_xc
+        ll_xc = ll_xc_ + log_prior
         # simpson integration + logsumexp trick
         max_c = torch.max(ll_xc, dim=0, keepdim=True).values
         ll_xc = ll_xc - max_c
