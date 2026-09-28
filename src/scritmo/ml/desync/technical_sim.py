@@ -11,11 +11,11 @@ from scipy.stats import circstd, circmean
 import scritmo as sr
 from scritmo import w, rh, ccg
 import seaborn as sns
-from .. import trainer
+from ..model import training as trainer
 from tqdm import tqdm
 import numpy as np
 from torch import tensor as tt
-from ..trainer import train_ritmo
+from ..model.training import train_ritmo
 from matplotlib import pyplot as plt
 from ..simulations.simulations import simulate_data_no_context
 
@@ -46,7 +46,7 @@ def _infer_phases_for_context(
     """
     Performs phase inference and returns structured results as a list of dictionaries.
     """
-    from ..context_model import ContextModel
+    from ..model.scritmo import Scritmo as ContextModel
 
     N_cell_ct, N_genes_ct = generated_data.shape
     data_c = torch.tensor(generated_data, dtype=torch.float32, device=device)

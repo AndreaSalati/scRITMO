@@ -7,7 +7,8 @@ from .warmup import warmup_and_train
 from .context_model import Scritmo, ContextModel
 
 # submodules that `import scritmo.ml` has always loaded, kept as attributes
-from . import analysis_utils, deconvolution, marginalization, desync
+from . import analysis_utils, deconvolution, marginalization, genome_fit, null_model
+from . import desync, model, tools
 from .unspliced.unspliced_deg import unspliced_lrt, refine_mle
 from .utils import *
 from .simulations.simulation_plot import *
