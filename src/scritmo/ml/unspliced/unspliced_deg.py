@@ -7,10 +7,12 @@ from scipy.stats import chi2
 from scritmo import Beta, optimal_shift, w, rh
 import pandas as pd
 from ..utils import harmonic_dm_torch, nmp
+from ..model.likelihood import grid_design
+from .fisher import FisherUncertaintyMixin
 import scritmo as sr
 
 
-class UnsplicedMixin:
+class UnsplicedMixin(FisherUncertaintyMixin):
     """
     Joint spliced/unspliced modeling.
 
@@ -39,6 +41,9 @@ class UnsplicedMixin:
       ``rhythmic_degradation=False`` fixes delta = 0 (null), True frees it. The null
       and the alternative differ by exactly one identifiable parameter. Kinetic rates
       are DERIVED quantities, see :meth:`get_kinetic_parameters`.
+
+    Fisher/Cramér–Rao uncertainties of the unspliced parameters come from
+    :class:`~scritmo.ml.unspliced.fisher.FisherUncertaintyMixin`.
 
     - ``"kinetic"`` (legacy): fit (beta, gamma_mean, A_gamma, phi_gamma). With rhythmic
       degradation this has a flat likelihood direction (the beta-gamma_mean ridge);
@@ -593,9 +598,7 @@ class UnsplicedMixin:
 
         if n_theta is not None:
             phi_x_new = self.phase_grid(n_theta, device=self.dev)
-            X_new = harmonic_dm_torch(phi_x_new, self.nh, False)
-            X = X_new.unsqueeze(1).expand(n_theta, self.Nc, self.nh * 2)
-            X = X[:, indices, :]
+            X = grid_design(phi_x_new, self.nh, self.Nc)[:, indices, :]
         else:
             X = self.X[:, indices, :]
 

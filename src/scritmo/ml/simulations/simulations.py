@@ -14,8 +14,7 @@ from scipy.sparse import csr_matrix
 import scritmo as sr
 from scritmo import w, rh, ccg
 import seaborn as sns
-from .. import trainer
-from scritmo.ml import context_model
+from ..model import training as trainer
 
 import contextlib
 import io
@@ -25,6 +24,14 @@ from tqdm import tqdm
 import numpy as np
 from torch import tensor as tt
 import matplotlib.pyplot as plt
+
+
+
+def _scritmo_class():
+    # imported lazily: this module is loaded while the model module itself loads
+    from ..model.scritmo import Scritmo
+
+    return Scritmo
 
 from .utils import (
     circular_std,
@@ -252,7 +259,7 @@ def get_simulation_results(
     )
     circadian_counts = data_c[0].sum(axis=1).cpu().numpy()
 
-    cmodel = context_model.ContextModel(mp, data_c, context_mode=context_mode)
+    cmodel = _scritmo_class()(mp, data_c, context_mode=context_mode)
     cmodel.to(device)
     with torch.no_grad():
         cmodel.log_disp.copy_(np.log(dispersion))
@@ -349,7 +356,7 @@ def get_simulation_results_indep_pop(
         mp_tmp["counts"] = mp["counts"][i]
         phi_sim_tmp = phi_sim[i]
         data_c_tmp = data_c[:, i, :]
-        cmodel = context_model.context_model.ContextModel(
+        cmodel = _scritmo_class()(
             mp_tmp, data_c_tmp, context_mode=context_mode
         )
         cmodel.to(device)

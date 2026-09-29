@@ -40,12 +40,26 @@ scRITMO takes single-cell expression vectors as input, fits a Negative Binomial 
 
 ### Core model
 
-The `ContextModel` is the central class. It implements:
+`scritmo.ml.Scritmo` is the central class (`ContextModel` is its historical alias). It implements:
 
 - **Negative Binomial count model** with gene-specific dispersion
 - **Single-harmonic expression profiles**: `log(μ_cg) = log(s_c) + m_g + A_g cos(θ_c − φ_g)`
 - **Marginal likelihood optimization** — cell phases are integrated out under a uniform prior, and gene parameters are learned via gradient descent (Adam)
 - **Posterior inference** — after training, each cell gets a full posterior distribution, from which the MAP estimate and cSTD uncertainty are extracted
+
+```python
+import scritmo.ml as cr
+
+model = cr.Scritmo(k_beta=2.0, n_theta=48)   # hyperparameters
+model.fit(adata, params_g, n_epochs=600)      # returns the model
+model.phases_, model.phases_std_, model.params_
+model.write_obs(adata)                        # scritmo_phase, scritmo_phase_std, ... in adata.obs
+df = model.desynchrony(adata, sample_key="sample_name", ext_time_key="ZTmod")
+```
+
+`cr.warmup_and_train(adata, params_g, ...)` does the same fit in one call and returns `(model, losses, mad_epochs)`.
+
+Code layout of `scritmo.ml`: `model/` (the class, likelihood maths, parameter tables, training), `desync/` (desynchrony and its technical floor), `tools/` (post-hoc analyses: null model, genome-wide refit), `unspliced/` (joint spliced/unspliced model), `simulations/`. The older module paths (`scritmo.ml.context_model`, `analysis_utils`, `warmup`, ...) still work.
 
 ## Installation
 
