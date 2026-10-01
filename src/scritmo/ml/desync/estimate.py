@@ -61,6 +61,7 @@ def estimate_phase_desynchrony(
     weight_by_post_std: bool = False,
     # --- Simulation mean estimation ---
     use_circular_mean: bool = False,
+    debias_mean: bool = False,
     # --- Over-subtraction policy ---
     clamp_bio_variance: bool = True,
 ):
@@ -230,6 +231,13 @@ def estimate_phase_desynchrony(
         If True, weight the desynchrony aggregation by ``post_std_c``.
     use_circular_mean : bool, default False
         Use the circular mean (vs. point estimate) for the simulated population means.
+    debias_mean : bool, default False
+        Only with ``sigma_tech_method="deconvolution"`` and ``use_circular_mean=True``.
+        Maps the circular mean of each group back through the mean direction of the
+        σ = 0 grid (:func:`scritmo.ml.desync.deconvolution.debias_phase`), so μ_b is the
+        phase whose synchronized twin has the observed mean direction. Removes the shift of
+        the inferred mean by the attractor bias, for data without a reliable external time.
+        Output gains ``deconv_debias_ok``.
     clamp_bio_variance : bool, default True
         What to do where the technical floor exceeds the observed spread
         (``sigma_data^2 - sigma_tech^2 < 0``). True clamps the difference to 0, so
@@ -262,6 +270,11 @@ def estimate_phase_desynchrony(
         raise ValueError(
             f"Unknown sigma_tech_method '{sigma_tech_method}'. Use 'simulation', "
             "'harmonic' or 'deconvolution' ('cramer_rao' was removed)."
+        )
+    if debias_mean and not (sigma_tech_method == "deconvolution" and use_circular_mean):
+        raise ValueError(
+            "debias_mean=True needs sigma_tech_method='deconvolution' (it inverts the "
+            "mean direction of the twin grid) and use_circular_mean=True"
         )
     if sigma_tech_method == "deconvolution" and deconv_form not in (
         "exact", "taylor", "vector"
@@ -347,6 +360,7 @@ def estimate_phase_desynchrony(
             seed=seed_real,
             weight_col="post_std_c" if weight_by_post_std else None,
             use_circular_mean=use_circular_mean,
+            debias_mean=debias_mean,
             period=period,
             deconv_form=deconv_form,
         )
