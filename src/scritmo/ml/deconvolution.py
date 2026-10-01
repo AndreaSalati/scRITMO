@@ -366,6 +366,30 @@ def resultant_under_bump(mu, sigma, cc):
     return complex(np.sum(cc["c"] * k * np.exp(1j * cc["j"] * mu)))
 
 
+def debias_phase(data_dir, cc, n_scan=1441):
+    """Bias corrected group phase: the μ whose σ = 0 twin has mean direction ``data_dir``.
+
+    Solves arg ρ(μ) = data_dir with ρ the complex Fourier series of the grid
+    (:func:`grid_complex_fourier`), i.e. inverts the mean direction m(θ) = arg ρ(θ) of the
+    inferred phases of a synchronized group. Of several upward crossings, the one closest to
+    ``data_dir`` is returned. NaN if arg ρ never crosses ``data_dir`` going upward (m(θ) too
+    flat to invert, e.g. at very low depth).
+    """
+    from scipy.optimize import brentq
+
+    def g(m):
+        return float(np.angle(eval_complex_fourier(m, cc)[0] * np.exp(-1j * data_dir)))
+
+    ms = np.linspace(0.0, 2 * np.pi, int(n_scan))
+    gs = np.angle(eval_complex_fourier(ms, cc) * np.exp(-1j * data_dir))
+    up = np.flatnonzero((gs[:-1] <= 0) & (gs[1:] > 0) & (gs[1:] - gs[:-1] < np.pi))
+    if up.size == 0:
+        return np.nan
+    roots = np.array([brentq(g, ms[i], ms[i + 1], xtol=1e-12) for i in up])
+    d = np.abs(np.angle(np.exp(1j * (roots - data_dir))))
+    return float(roots[np.argmin(d)] % (2 * np.pi))
+
+
 def _vector_L_and_dL(mu, cc, n):
     """L(σ) = (1 − 1/n)|ρ̄(σ)|² + 1/n and dL/dσ, vectorised in σ."""
     j = cc["j"].astype(float)
@@ -508,6 +532,7 @@ def aggregate_technical_deconvolution(
     seed: int = 42,
     weight_col: str | None = None,
     use_circular_mean: bool = False,
+    debias_mean: bool = False,
     ext_time_col: str = "ext_time_hours",
     period: float = 24.0,
     deconv_form: str = "exact",
@@ -530,7 +555,11 @@ def aggregate_technical_deconvolution(
          or the circular mean of its inferred phases (True) — the phase the simulation
          twin is generated at. With ``n_replicates`` the sample-level μ is broadcast to
          its ``_1.._n`` splits (as in `aggregate_technical_harmonic`); each split keeps
-         its own V_b, so σ̂ is solved per split.
+         its own V_b, so σ̂ is solved per split. With ``debias_mean=True`` (requires
+         ``use_circular_mean=True``) the circular mean is mapped back through the mean
+         direction of the grid, μ_b = :func:`debias_phase`, which removes the shift of the
+         inferred mean by the attractor bias; groups where it fails keep the circular mean
+         (``deconv_debias_ok`` False).
       4. Solve per row with :func:`solve_exact`, :func:`solve_taylor` or, for
          ``deconv_form="vector"``, :func:`solve_vector` on the complex resultant of the grid
          (R̄² = exp(−Data_cSTD²), n = group_size; see the module docstring).
@@ -554,6 +583,9 @@ def aggregate_technical_deconvolution(
         group_cols = ["context", "sample_name"]
     if deconv_form not in DECONV_FORMS:
         raise ValueError(f"deconv_form must be one of {DECONV_FORMS}, got {deconv_form!r}")
+    if debias_mean and not use_circular_mean:
+        raise ValueError("debias_mean=True corrects the circular mean; it needs "
+                         "use_circular_mean=True (with False, μ_b is the external time)")
 
     # --- 1. grid -> f(φ_k) -> Fourier coefficients, per context ---
     curve, per_run = grid_variance_curve(df_grid, post_estimator=post_estimator)
@@ -567,7 +599,7 @@ def aggregate_technical_deconvolution(
             "per_run": per_run[per_run.context == ctx].reset_index(drop=True),
             "coef": coef,
         }
-    if deconv_form == "vector":
+    if deconv_form == "vector" or debias_mean:
         rcurve = grid_resultant_curve(df_grid, post_estimator=post_estimator)
         for ctx, c in rcurve.groupby("context"):
             diag[str(ctx)]["rho_curve"] = c.reset_index(drop=True)
@@ -597,16 +629,24 @@ def aggregate_technical_deconvolution(
             f"  WARNING: use_circular_mean=False needs '{ext_time_col}' in the results "
             "frame; falling back to the circular mean of the inferred phases."
         )
-    mu_of, dir_of = {}, {}
+    mu_of, dir_of, debias_ok = {}, {}, {}
     for keys, grp in df_r.groupby(group_cols):
         keys = keys if isinstance(keys, tuple) else (keys,)
         cm = float(circmean(grp[post_estimator].values, high=2 * np.pi, low=0))
         dir_of[keys] = cm
         if use_circular_mean or not have_ext:
             mu = cm
+            if debias_mean:
+                ctx_k = str(dict(zip(group_cols, keys))["context"])
+                mu_d = debias_phase(cm, diag[ctx_k]["cc"])
+                debias_ok[keys] = bool(np.isfinite(mu_d))
+                mu = mu_d if debias_ok[keys] else cm
         else:
             mu = float((float(grp[ext_time_col].iloc[0]) % period) / period * 2 * np.pi)
         mu_of[keys] = mu
+    if debias_mean and not all(debias_ok.values()):
+        print(f"  debias_mean: {sum(not v for v in debias_ok.values())} of {len(debias_ok)} "
+              "groups not invertible, kept the circular mean")
 
     # --- 4. solve per output row ---
     rows = []
@@ -644,6 +684,8 @@ def aggregate_technical_deconvolution(
         else:
             sol = solve_taylor(V, mu, coef, eps=taylor_eps)
             extra = {"deconv_denominator": sol["denominator"]}
+        if debias_mean:
+            extra["deconv_debias_ok"] = debias_ok.get(mu_key, False)
         T_hat = sol["T_hat"]
         rows.append(
             dict(
