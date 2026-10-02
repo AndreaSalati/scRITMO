@@ -520,7 +520,7 @@ def grid_variance_curve(df_grid, post_estimator="post_mode"):
 
 
 # ---------------------------------------------------------------------------
-# aggregation (drop-in for aggregate_technical_harmonic)
+# aggregation
 # ---------------------------------------------------------------------------
 def aggregate_technical_deconvolution(
     df_grid: pd.DataFrame,
@@ -554,7 +554,7 @@ def aggregate_technical_deconvolution(
       3. μ_b per (context, sample): the sample's external time (use_circular_mean=False)
          or the circular mean of its inferred phases (True) — the phase the simulation
          twin is generated at. With ``n_replicates`` the sample-level μ is broadcast to
-         its ``_1.._n`` splits (as in `aggregate_technical_harmonic`); each split keeps
+         its ``_1.._n`` splits (as for the other floors); each split keeps
          its own V_b, so σ̂ is solved per split. With ``debias_mean=True`` (requires
          ``use_circular_mean=True``) the circular mean is mapped back through the mean
          direction of the grid, μ_b = :func:`debias_phase`, which removes the shift of the

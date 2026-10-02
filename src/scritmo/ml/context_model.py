@@ -15,7 +15,6 @@ from .utils import circ_std_P, harmonic_dm_torch  # noqa: F401
 from .marginalization import MarginalizationMixin  # noqa: F401
 from .unspliced.fisher import FisherUncertaintyMixin  # noqa: F401
 from .desync.results import desync_means, desync_results  # noqa: F401
-from .desync.harmonic_floor import aggregate_technical_harmonic  # noqa: F401
 from .desync.deconvolution import aggregate_technical_deconvolution  # noqa: F401
 
 globals().update({k: v for k, v in vars(_moved).items() if not k.startswith("__")})

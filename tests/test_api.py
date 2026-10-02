@@ -167,7 +167,7 @@ def test_old_module_paths():
     from scritmo.ml.context_model import Scritmo as S1, ContextModel as C1
     from scritmo.ml.warmup import warmup_and_train as w1, arc_mesor_correction  # noqa: F401
     from scritmo.ml.trainer import train_ritmo  # noqa: F401
-    from scritmo.ml.analysis_utils import desync_results, aggregate_technical_harmonic  # noqa: F401
+    from scritmo.ml.analysis_utils import desync_results  # noqa: F401
     from scritmo.ml.deconvolution import solve_exact  # noqa: F401
     from scritmo.ml.simulations.simulate_populations import _infer_phases_for_context  # noqa: F401
     from scritmo.ml.null_model import NullModelMixin  # noqa: F401

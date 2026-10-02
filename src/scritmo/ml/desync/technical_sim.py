@@ -314,13 +314,13 @@ def simulate_technical_grid(
     seed_sim: int | None = None,
     posterior_cell_chunk: int | None = None,
 ):
-    """Twin-population grid for the phase-resolved ("harmonic") technical floor.
+    """Twin-population grid for the phase-resolved (deconvolution) technical floor.
 
     σ_tech is itself phase-dependent (large near the Bmal1 trough, small at high
     expression). This builds a perfectly-synchronized ("twin") population at each of
     ``n_grid`` common phases evenly spaced over [0, 2π), re-infers phases, and returns the
-    inferred phases per grid point so the caller can fit σ_tech²(φ) (see
-    :func:`scritmo.ml.analysis_utils.aggregate_technical_harmonic`).
+    inferred phases per grid point so the caller can estimate σ_tech²(φ) (see
+    :func:`scritmo.ml.desync.deconvolution.aggregate_technical_deconvolution`).
 
     Every twin population is common-phase (σ_bio = 0) -- that is what makes its inferred
     spread a pure noise floor. Library sizes are POOLED across all cells of ``adata`` (all
@@ -331,10 +331,7 @@ def simulate_technical_grid(
 
     Parameters mirror :func:`simulate_cell_populations` where shared. ``n_grid`` grid points,
     ``n_cells_per_gridpoint`` twin cells per (grid point, run), ``n_sim_runs`` independent
-    runs per grid point (more runs -> more fit points for the floor OLS). ``n_grid`` default
-    was raised 12 -> 24 on 2026-08-11, when the fitted basis widened from 12h-only (3
-    coefficients) to orders (1,2,3) (7 coefficients); see
-    :func:`scritmo.ml.analysis_utils.fit_harmonic_floor_multi`.
+    runs per grid point.
 
     Returns
     -------

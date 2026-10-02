@@ -114,7 +114,7 @@ def desync_results(
 
     `sim_agg` lets a caller bypass the simulation twin: pass a precomputed technical table (same
     schema as `aggregate_simulated_results`: context, sample_name, Technical_cSTD[rad], Technical_R)
-    and `df_sim` is not used. This is the harmonic-floor path (`aggregate_technical_harmonic`).
+    and `df_sim` is not used.
 
     `clamp_bio_variance` controls what happens when the technical floor EXCEEDS the observed
     spread, i.e. sigma_data^2 - sigma_tech^2 < 0:

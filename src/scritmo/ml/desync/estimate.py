@@ -10,7 +10,6 @@ import numpy as np
 from scritmo import cSTD, cstd2R, rh
 from ..utils import resolve_device
 from .results import create_results_dataframe, desync_results
-from .harmonic_floor import aggregate_technical_harmonic
 from .deconvolution import aggregate_technical_deconvolution
 from .technical_sim import simulate_cell_populations, simulate_technical_grid
 
@@ -46,12 +45,9 @@ def estimate_phase_desynchrony(
     seed_sim: int | None = None,
     # --- Technical floor method ---
     sigma_tech_method: str = "simulation",
-    # --- Harmonic floor arguments ---
+    # --- Twin grid arguments (deconvolution) ---
     n_grid: int = 24,
     n_cells_per_gridpoint: int = 1000,
-    return_harmonic_diagnostics: bool = False,
-    harmonic_orders=(1, 2, 3),
-    harmonic_eval: str = "sample",
     # --- Deconvolution floor arguments ---
     deconv_form: str = "exact",
     return_deconv_diagnostics: bool = False,
@@ -83,12 +79,6 @@ def estimate_phase_desynchrony(
          - "simulation": simulate a perfectly-synchronized population
            (``kappa=inf``) with this model and re-infer phases, so the recovered
            spread is purely technical (:func:`simulate_cell_populations`).
-         - "harmonic": run the synchronized twin across a GRID of common phases
-           (:func:`simulate_technical_grid`), fit the 12h structure of σ_tech²(φ)
-           with a 2-harmonic model, then evaluate that fitted floor at each real
-           cell's inferred phase and average within each replicate. Corrects the
-           single-φ "simulation" floor for its known phase dependence (large near
-           the Bmal1 trough, small at high expression).
          - "deconvolution": run the same σ=0 twin grid, take f(φ_k) = mean over
            runs of cSTD², expand it in its FULL Fourier series (all harmonics up to
            Nyquist, no fit), and solve per group for the σ_bio that makes the
@@ -157,41 +147,15 @@ def estimate_phase_desynchrony(
         RNG seed for the real-data bootstrap.
     seed_sim : int, optional
         RNG seed for the simulation.
-    sigma_tech_method : {"simulation", "harmonic", "deconvolution"}, default "simulation"
+    sigma_tech_method : {"simulation", "deconvolution"}, default "simulation"
         How to estimate the technical floor (see step 2).
     n_grid : int, default 24
-        (harmonic / deconvolution) Number of common phases on the twin grid, evenly spaced
-        over [0, 2π). Raised from 12 on 2026-08-11 together with the wider
-        ``harmonic_orders`` default, so the 7-coefficient fit is not over-parametrised.
+        (deconvolution) Number of common phases on the twin grid, evenly spaced
+        over [0, 2π).
     n_cells_per_gridpoint : int, default 1000
-        (harmonic / deconvolution) Twin cells simulated per (grid point, run). For
+        (deconvolution) Twin cells simulated per (grid point, run). For
         deconvolution, match it to the typical group size n_b: f(φ_k) is a mean of
         per-run cSTD², so its finite-n bias then matches the data's V_b.
-    return_harmonic_diagnostics : bool, default False
-        (harmonic method) If True, store the fitted coefficients, raw grid points and
-        implied peak locations on ``model.harmonic_floor_diag`` for plotting/checking.
-        ``grid_phase``/``grid_var`` there are the RAW Monte-Carlo σ_tech² points the fit
-        was made to, so data-vs-fit adequacy can be judged directly; ``coef`` evaluates
-        via :func:`scritmo.ml.analysis_utils.eval_harmonic_floor_multi`.
-    harmonic_orders : tuple of int, default (1, 2, 3)
-        (harmonic method) Harmonic orders in the floor
-        σ_tech²(φ) = m + Σ_k [a_k·cos(kφ) + b_k·sin(kφ)]. Was ``(2,)`` (12h only, from the
-        single-gene Fisher-information argument) until 2026-08-11; that basis explained
-        R²=0.013 of the raw twin grid on a 15-gene template — it collapsed to a near-flat
-        line and mis-corrected every sample. ``(1, 2, 3)`` is where both the 15-gene sim
-        and the 4-gene SABER-FISH panel saturate. Pass ``(2,)`` to reproduce older results.
-        Fits 1 + 2·len(orders) coefficients, so keep ``n_grid`` comfortably above that.
-    harmonic_eval : {"sample", "per_cell"}, default "sample"
-        (harmonic method) Where the fitted floor σ_tech²(φ) is evaluated.
-        ``"sample"`` uses ONE phase per (context, sample) — the same phase the simulation
-        twin would be generated at, selected by ``use_circular_mean`` (False → the sample's
-        external time, True → the circular mean of its inferred phases).
-        ``"per_cell"`` is the pre-2026-08-11 behaviour: evaluate at every cell's inferred
-        phase and average. That is biased — the floor is curved, so averaging over a spread
-        of phases flattens it (Jensen), and the width of that spread is σ_tech itself, so
-        the error grows exactly where a phase-resolved floor should help. Kept only for
-        reproducibility; see
-        :func:`scritmo.ml.analysis_utils.aggregate_technical_harmonic` for the measured cost.
     deconv_form : {"exact", "taylor", "vector"}, default "exact"
         (deconvolution method) "exact" solves T_b(σ) + σ² = V_b on [0, π] with brentq
         and returns NaN with ``deconv_flag`` ∈ {"below_floor", "no_root",
@@ -216,7 +180,7 @@ def estimate_phase_desynchrony(
         With ``clamp_bio_variance=True`` the "below_floor" groups are set to
         Bio_cSTD = 0 and Technical_cSTD = Data_cSTD (the other flags stay NaN).
     tech_grid : pandas.DataFrame, optional
-        (harmonic / deconvolution) A precomputed twin grid from
+        (deconvolution) A precomputed twin grid from
         :meth:`simulate_technical_grid` to reuse instead of simulating a new one (e.g.
         one grid shared by several estimators). The grid used is kept on
         ``model.last_tech_grid``.
@@ -266,10 +230,10 @@ def estimate_phase_desynchrony(
             "circle; it is not supported for models fit with phase_range."
         )
 
-    if sigma_tech_method not in ("simulation", "harmonic", "deconvolution"):
+    if sigma_tech_method not in ("simulation", "deconvolution"):
         raise ValueError(
-            f"Unknown sigma_tech_method '{sigma_tech_method}'. Use 'simulation', "
-            "'harmonic' or 'deconvolution' ('cramer_rao' was removed)."
+            f"Unknown sigma_tech_method '{sigma_tech_method}'. Use 'simulation' "
+            "or 'deconvolution' ('cramer_rao' and 'harmonic' were removed)."
         )
     if debias_mean and not (sigma_tech_method == "deconvolution" and use_circular_mean):
         raise ValueError(
@@ -324,7 +288,7 @@ def estimate_phase_desynchrony(
             )
 
     deconv_table = None
-    if sigma_tech_method in ("harmonic", "deconvolution"):
+    if sigma_tech_method == "deconvolution":
         # the sigma=0 twin grid of common phases; reused as-is when the caller passes a
         # precomputed one (e.g. one grid shared by deconv_form="exact" and "taylor")
         if tech_grid is not None:
@@ -372,39 +336,6 @@ def estimate_phase_desynchrony(
             f"  deconvolution floor ({deconv_form}): flags "
             f"{deconv_table['deconv_flag'].value_counts().to_dict()}"
         )
-    elif sigma_tech_method == "harmonic":
-        # 2a''. Phase-resolved floor: twin grid of common phases -> fit sigma_tech^2(phi),
-        # evaluate at each real cell's inferred phase, average within replicate.
-        tech_agg, harmonic_coeffs = aggregate_technical_harmonic(
-            df_grid,
-            df_real,
-            group_cols=group_cols if group_cols is not None
-            else ["context", "sample_name"],
-            post_estimator=post_estimator,
-            n_replicates=n_replicates_real,
-            harmonic_orders=harmonic_orders,
-            # evaluate the fitted floor at the SAME phase the simulation twin would be
-            # generated at, so the two methods differ only in how the floor is obtained
-            use_circular_mean=use_circular_mean,
-            harmonic_eval=harmonic_eval,
-            period=period,
-        )
-        # sanity output: terms actually fitted, plus how well they explain the raw grid
-        for ctx, c in harmonic_coeffs.items():
-            terms = "".join(
-                f" + {c['coef']['a'][k]:.4f}*cos({k}phi)"
-                f" + {c['coef']['b'][k]:.4f}*sin({k}phi)"
-                for k in c["coef"]["orders"]
-            )
-            peaks = " / ".join(f"{p:.1f}h" for p in c["peak_hours"])
-            print(
-                f"  harmonic floor [{ctx}]: sigma_tech^2(phi) = "
-                f"{c['m']:.4f}{terms}  -> peaks at {peaks}  "
-                f"(R^2={c['r2']:.3f} on the raw grid)"
-            )
-        if return_harmonic_diagnostics:
-            model.harmonic_floor_diag = harmonic_coeffs
-        df_sim = None
     else:
         # 2a. Simulate the technical twin (point estimates only)
         df_sim = simulate_cell_populations(

@@ -750,7 +750,7 @@ class Scritmo(nn.Module, UnsplicedMixin):
             context_key: Optional ``adata.obs`` column grouping samples (e.g.
                 celltype or condition). None puts every cell in one group.
             ext_phase: Optional reference phase per cell (radians) to align to.
-            method: Technical floor, "simulation", "harmonic" or "deconvolution"
+            method: Technical floor, "simulation" or "deconvolution"
                 (``sigma_tech_method``).
             layer: Count layer.
             **kwargs: Any other argument of :func:`scritmo.ml.desync.estimate_phase_desynchrony`.
@@ -1253,7 +1253,7 @@ class Scritmo(nn.Module, UnsplicedMixin):
         seed_sim: int | None = None,
         posterior_cell_chunk=None,
     ):
-        """Wrapper around the simulate_technical_grid function (harmonic σ_tech floor).
+        """Wrapper around the simulate_technical_grid function (deconvolution σ_tech floor).
 
         ``device`` is resolved with :func:`scritmo.ml.utils.resolve_device`.
         """
