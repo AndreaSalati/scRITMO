@@ -11,12 +11,7 @@ from scritmo.ml.deconvolution import (
     aggregate_technical_deconvolution,
     eval_fourier,
     f_at,
-    f_second_derivative,
     grid_fourier_coefficients,
-    solve_common_sigma,
-    solve_exact,
-    solve_taylor,
-    technical_term,
 )
 
 N_GRID = 24
@@ -42,14 +37,6 @@ def wrapped_normal_pdf(theta, mu, sigma, n_wrap=12):
     k = np.arange(-n_wrap, n_wrap + 1)
     d = theta[:, None] - mu + 2 * np.pi * k[None, :]
     return np.exp(-0.5 * (d / sigma) ** 2).sum(1) / (sigma * np.sqrt(2 * np.pi))
-
-
-def V_numerical(mu, sigma, f=f_true, n=200_000):
-    """E_{θ~WN(μ,σ)}[f(θ)] + σ² by brute-force quadrature on the circle."""
-    th = np.linspace(0, 2 * np.pi, n, endpoint=False)
-    p = wrapped_normal_pdf(th, mu, sigma)
-    dth = 2 * np.pi / n
-    return float(np.sum(p * f(th)) * dth) + sigma**2
 
 
 @pytest.fixture(scope="module")
@@ -89,81 +76,9 @@ def test_non_uniform_grid_raises():
                                   np.ones(24))
 
 
-def test_technical_term_matches_quadrature(coef):
+def test_f_at_matches_series(coef):
     for mu in (0.0, 1.3, 4.0):
-        for sigma in (0.0, 0.2, 0.7):
-            if sigma == 0:
-                assert technical_term(mu, 0.0, coef) == pytest.approx(f_true(mu), abs=1e-12)
-                continue
-            T_num = V_numerical(mu, sigma) - sigma**2
-            assert technical_term(mu, sigma, coef) == pytest.approx(T_num, abs=1e-9)
-
-
-@pytest.mark.parametrize("mu", [0.0, 0.9, 2.5, 3.7, 5.6])
-@pytest.mark.parametrize("sigma", [0.05, 0.26, 0.6, 1.2])
-def test_exact_recovers_sigma(coef, mu, sigma):
-    V = V_numerical(mu, sigma)
-    sol = solve_exact(V, mu, coef)
-    assert sol["flag"] == "ok"
-    assert sol["sigma"] == pytest.approx(sigma, abs=1e-6)
-    # implied split is exact: V = T(σ̂) + σ̂²
-    assert sol["T_hat"] + sol["sigma"] ** 2 == pytest.approx(V, abs=1e-10)
-
-
-def test_taylor_accurate_at_small_sigma(coef):
-    for mu in (0.0, 2.5, 5.6):
-        sigma = 0.05
-        V = V_numerical(mu, sigma)
-        sol = solve_taylor(V, mu, coef)
-        assert sol["flag"] == "ok"
-        assert sol["sigma"] == pytest.approx(sigma, rel=1e-3)
-        # and it is strictly better than the plain twin sqrt(V - f(mu))
-        twin = np.sqrt(max(V - f_at(mu, coef), 0.0))
-        assert abs(sol["sigma"] - sigma) <= abs(twin - sigma) + 1e-12
-    # at large sigma the first-order form degrades but stays finite here
-    V = V_numerical(0.9, 1.2)
-    assert np.isfinite(solve_taylor(V, 0.9, coef)["sigma"])
-
-
-def test_second_derivative(coef):
-    mu, h = 1.1, 1e-4
-    fd = (f_true(mu + h) - 2 * f_true(mu) + f_true(mu - h)) / h**2
-    assert f_second_derivative(mu, coef) == pytest.approx(float(fd), abs=1e-5)
-
-
-def test_flags(coef):
-    mu = 1.0
-    f_mu = f_at(mu, coef)
-    # below the floor: V < f(mu)
-    assert solve_exact(f_mu - 0.01, mu, coef)["flag"] == "below_floor"
-    assert np.isnan(solve_exact(f_mu - 0.01, mu, coef)["sigma"])
-    assert solve_taylor(f_mu - 0.01, mu, coef)["flag"] == "below_floor"
-    # exactly at the floor -> sigma 0
-    assert solve_exact(f_mu, mu, coef)["sigma"] == pytest.approx(0.0, abs=1e-12)
-    # above h(sigma_max)
-    assert solve_exact(20.0, mu, coef)["flag"] == "no_root"
-
-    # a sharply peaked f: f''(0) = -9*0.4 < -2 -> h decreases first (non-monotone),
-    # and the Taylor denominator 1 + f''/2 is negative
-    peak = grid_fourier_coefficients(GRID, 0.6 + 0.4 * np.cos(3 * GRID))
-    assert 1 + 0.5 * f_second_derivative(0.0, peak) < 0
-    assert solve_taylor(1.2, 0.0, peak)["flag"] == "denominator"
-    s = np.linspace(0, np.pi, 4001)
-    h = np.array([technical_term(0.0, x, peak) + x**2 for x in s])
-    V_mid = 0.5 * (h[0] + h.min())  # between the dip and h(0): two roots
-    sol = solve_exact(V_mid, 0.0, peak)
-    assert sol["flag"] == "non_monotone" and np.isnan(sol["sigma"])
-    assert not sol["monotone"]
-
-
-def test_common_sigma(coef):
-    mus = np.linspace(0, 2 * np.pi, 6, endpoint=False)
-    w = np.array([1.0, 2.0, 1.0, 3.0, 1.0, 1.0])
-    sigma = 0.4
-    V = np.array([V_numerical(m, sigma) for m in mus])
-    sol = solve_common_sigma(V, mus, w, coef)
-    assert sol["flag"] == "ok"
-    assert sol["sigma"] == pytest.approx(sigma, abs=1e-6)
+        assert f_at(mu, coef) == pytest.approx(float(f_true(mu)), abs=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -196,14 +111,11 @@ def _synthetic_frames(rng, n_grid_cells=20_000, n_real=30_000, sigma_bio=0.3):
     return df_grid, pd.concat(real, ignore_index=True)
 
 
-@pytest.mark.parametrize("form", ["exact", "taylor"])
-def test_aggregation_and_attach(form):
+def test_aggregation_and_attach():
     rng = np.random.default_rng(3)
     sigma_bio = 0.3
     df_grid, df_real = _synthetic_frames(rng, sigma_bio=sigma_bio)
-    table, diag = aggregate_technical_deconvolution(
-        df_grid, df_real, deconv_form=form
-    )
+    table, diag = aggregate_technical_deconvolution(df_grid, df_real)
     assert set(table["deconv_flag"]) == {"ok"}
     # composite noise model is only approximately V = E f + σ² in -2lnR units
     np.testing.assert_allclose(table["deconv_sigma"], sigma_bio, atol=0.03)
@@ -244,7 +156,7 @@ def test_attach_clamp_below_floor():
         Technical_cSTD=[0.5, np.nan], Technical_R=[np.nan, np.nan],
         deconv_sigma=[0.2, np.nan], deconv_flag=["ok", "below_floor"],
         deconv_V=[0.29, 0.2], deconv_mu=[0.0, 1.0], deconv_f_mu=[0.25, 0.3],
-        deconv_f2_mu=[0.1, 0.1], deconv_T_hat=[0.25, np.nan], deconv_form="exact",
+        deconv_T_hat=[0.25, np.nan],
     ))
     df_d = pd.DataFrame(dict(context=["c", "c"], sample_name=["a", "b"],
                              Data_cSTD=[np.sqrt(0.29) * rh, np.sqrt(0.2) * rh],
@@ -259,7 +171,7 @@ def test_attach_clamp_below_floor():
 
 
 # ---------------------------------------------------------------------------
-# VECTOR form
+# resultant (vector) solver
 # ---------------------------------------------------------------------------
 from scritmo.ml.deconvolution import (  # noqa: E402
     eval_complex_fourier,
@@ -335,21 +247,20 @@ def test_vector_recovers_sigma(cc, mu, sigma, n):
     assert sol["pred_dir"] == pytest.approx(np.angle(z) % (2 * np.pi), abs=1e-6)
 
 
-def test_variance_exact_biased_where_vector_is_not(cc):
-    # the variance form sees only f = -2 ln r on the grid: the infinite-n twin floor
+def test_vector_unbiased_where_single_point_twin_is_not(cc):
+    # the single-point twin reads the infinite-n floor f = -2 ln r at the group centre
     f_grid = -2 * np.log(np.abs(rho_true(GRID)))
     coef_f = grid_fourier_coefficients(GRID, f_grid)
     sigma = 0.6
-    err_exact, err_vec = [], []
+    err_twin, err_vec = [], []
     for mu in np.linspace(0, 2 * np.pi, 8, endpoint=False):
         z = z_numerical(mu, sigma)
         V = -2 * np.log(abs(z))  # Data cSTD^2 at infinite n
-        se = solve_exact(V, mu, coef_f)
         sv = solve_vector(abs(z) ** 2, np.inf, mu, cc)
-        err_exact.append(se["sigma"] - sigma if se["flag"] == "ok" else np.inf)
+        err_twin.append(np.sqrt(max(V - f_at(mu, coef_f), 0.0)) - sigma)
         err_vec.append(sv["sigma"] - sigma)
     assert np.max(np.abs(err_vec)) < 1e-6
-    assert np.max(np.abs(err_exact)) > 0.05
+    assert np.max(np.abs(err_twin)) > 0.05
 
 
 def test_vector_flags(cc):
@@ -366,7 +277,7 @@ def test_vector_aggregation(n_rep):
     sigma_bio = 0.3
     df_grid, df_real = _synthetic_frames(rng, sigma_bio=sigma_bio)
     table, diag = aggregate_technical_deconvolution(
-        df_grid, df_real, deconv_form="vector", n_replicates=n_rep)
+        df_grid, df_real, n_replicates=n_rep)
     assert set(table["deconv_flag"]) == {"ok"}
     tol = 0.03 if n_rep is None else 0.06
     np.testing.assert_allclose(table["deconv_sigma"], sigma_bio, atol=tol)

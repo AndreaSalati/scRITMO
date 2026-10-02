@@ -49,7 +49,6 @@ def estimate_phase_desynchrony(
     n_grid: int = 24,
     n_cells_per_gridpoint: int = 1000,
     # --- Deconvolution floor arguments ---
-    deconv_form: str = "vector",
     return_deconv_diagnostics: bool = False,
     tech_grid=None,
     # --- Cell filtering / weighting ---
@@ -79,15 +78,12 @@ def estimate_phase_desynchrony(
          - "simulation": simulate a perfectly-synchronized population
            (``kappa=inf``) with this model and re-infer phases, so the recovered
            spread is purely technical (:func:`simulate_cell_populations`).
-         - "deconvolution": run the same σ=0 twin grid, take f(φ_k) = mean over
-           runs of cSTD², expand it in its FULL Fourier series (all harmonics up to
-           Nyquist, no fit), and solve per group for the σ_bio that makes the
-           bump-averaged floor consistent with the data:
-           V_b = T_b(σ) + σ², T_b(σ) = f_0 + Σ_j e^{−j²σ²/2}[a_j cos jμ_b + b_j sin jμ_b]
-           (``deconv_form="exact"``, brentq), or its first-order closed form
-           σ̂² = (V_b − f(μ_b)) / (1 + ½ f''(μ_b)) (``deconv_form="taylor"``).
-           Removes the "one point for the technical term" error of the twin
-           (≈ ½ σ²_bio f''(μ_b)). See :mod:`scritmo.ml.deconvolution`.
+         - "deconvolution": run the same σ=0 twin grid, take the complex mean
+           resultant ρ(φ_k) = mean of exp(i·post_mode) over all grid cells at φ_k,
+           expand it in its FULL complex Fourier series (all harmonics up to Nyquist,
+           no fit), and solve per group for the σ_bio whose bump-averaged resultant
+           matches the data. Removes the "one point for the technical term" error of
+           the twin. See :mod:`scritmo.ml.desync.deconvolution`.
     3. Computes desynchrony per group by comparing the real dispersion to the
        technical floor (:func:`desync_results`).
 
@@ -149,29 +145,16 @@ def estimate_phase_desynchrony(
         RNG seed for the simulation.
     sigma_tech_method : {"simulation", "deconvolution"}, default "simulation"
         How to estimate the technical floor (see step 2).
-    n_grid : int, default 24
-        (deconvolution) Number of common phases on the twin grid, evenly spaced
-        over [0, 2π).
-    n_cells_per_gridpoint : int, default 1000
-        (deconvolution) Twin cells simulated per (grid point, run). For
-        deconvolution, match it to the typical group size n_b: f(φ_k) is a mean of
-        per-run cSTD², so its finite-n bias then matches the data's V_b.
-    deconv_form : {"exact", "taylor", "vector"}, default "vector"
-        (deconvolution method) "exact" solves T_b(σ) + σ² = V_b on [0, π] with brentq
-        and returns NaN with ``deconv_flag`` ∈ {"below_floor", "no_root",
-        "non_monotone"} when σ is not identified (h − V_b must cross zero exactly
-        once, with dh/dσ > 0 at the root). "taylor" is the closed form
-        (V_b − f(μ_b)) / (1 + ½ f''(μ_b)) with flags "below_floor", "denominator",
-        "negative_tech". "vector" works on the complex mean resultant instead of the
-        variance: ρ(φ_k) = mean of exp(i·post_mode) over all grid cells at φ_k, its
-        complex Fourier series smoothed by the bump, ρ̄_b(σ) = Σ_j c_j e^{−j²σ²/2}
-        e^{ijμ_b}, and σ solves |ρ̄_b(σ)|² + (1 − |ρ̄_b(σ)|²)/n_b = |z̄_b|². It keeps the
-        direction of ρ, so it contains the attractor-bias and circular log-Jensen terms
-        that "exact"/"taylor" ignore; its implied Technical_cSTD is
+        With "deconvolution" it solves per group
+        |ρ̄_b(σ)|² + (1 − |ρ̄_b(σ)|²)/n_b = |z̄_b|², where ρ(φ_k) = mean of exp(i·post_mode)
+        over all grid cells at φ_k, ρ̄_b(σ) = Σ_j c_j e^{−j²σ²/2} e^{ijμ_b} is its complex
+        Fourier series smoothed by the bump, and z̄_b is the mean of exp(i·post_mode)
+        over the group's cells. It keeps the direction of ρ, so it contains the
+        attractor-bias and circular log-Jensen terms. Its implied Technical_cSTD is
         √(Data_cSTD² − σ̂²) (NaN if σ̂ > Data_cSTD, flagged by ``deconv_neg_tech``).
         The group phase μ_b is chosen by ``use_circular_mean`` exactly
         as for the other methods. The output gains ``deconv_flag``,
-        ``deconv_f_mu_h`` (√f(μ_b), h), ``deconv_f2_mu`` (f''(μ_b), dimensionless),
+        ``deconv_f_mu_h`` (√f(μ_b), h),
         ``deconv_mu_h`` and ``Technical_cSTD_floor`` (√f(μ_b), h, the single-point
         twin value read from the series). ``Technical_cSTD`` is the IMPLIED term
         √T_b(σ̂_b), so Data² = Technical² + Bio² per group by construction and
@@ -179,13 +162,20 @@ def estimate_phase_desynchrony(
         identified groups (the unidentified ones carry NaN and are dropped/counted).
         With ``clamp_bio_variance=True`` the "below_floor" groups are set to
         Bio_cSTD = 0 and Technical_cSTD = Data_cSTD (the other flags stay NaN).
+    n_grid : int, default 24
+        (deconvolution) Number of common phases on the twin grid, evenly spaced
+        over [0, 2π).
+    n_cells_per_gridpoint : int, default 1000
+        (deconvolution) Twin cells simulated per (grid point, run). For
+        deconvolution, match it to the typical group size n_b: f(φ_k) is a mean of
+        per-run cSTD², so its finite-n bias then matches the data's V_b.
     tech_grid : pandas.DataFrame, optional
         (deconvolution) A precomputed twin grid from
         :meth:`simulate_technical_grid` to reuse instead of simulating a new one (e.g.
         one grid shared by several estimators). The grid used is kept on
         ``model.last_tech_grid``.
     return_deconv_diagnostics : bool, default False
-        (deconvolution method) Store {context: {"curve", "per_run", "coef"}} (the grid
+        (deconvolution method) Store {context: {"curve", "per_run", "coef", "rho_curve", "cc"}} (the grid
         f(φ_k), its per-run values and the Fourier coefficients) on
         ``model.deconv_diag``.
     post_std_threshold : float, default inf
@@ -218,7 +208,7 @@ def estimate_phase_desynchrony(
         real / technical dispersion columns). Also stores the intermediate
         real-data frame on ``model.result_df``. With
         ``sigma_tech_method="deconvolution"`` it also carries the ``deconv_*``
-        columns and ``Technical_cSTD_floor`` (see ``deconv_form``); ``Bio_cSTD`` is
+        columns and ``Technical_cSTD_floor`` (see ``sigma_tech_method``); ``Bio_cSTD`` is
         then σ̂_b in hours (NaN where not identified).
     """
 
@@ -239,12 +229,6 @@ def estimate_phase_desynchrony(
         raise ValueError(
             "debias_mean=True needs sigma_tech_method='deconvolution' (it inverts the "
             "mean direction of the twin grid) and use_circular_mean=True"
-        )
-    if sigma_tech_method == "deconvolution" and deconv_form not in (
-        "exact", "taylor", "vector"
-    ):
-        raise ValueError(
-            f"deconv_form must be 'exact', 'taylor' or 'vector', got {deconv_form!r}"
         )
 
     if context_col is None:
@@ -290,7 +274,7 @@ def estimate_phase_desynchrony(
     deconv_table = None
     if sigma_tech_method == "deconvolution":
         # the sigma=0 twin grid of common phases; reused as-is when the caller passes a
-        # precomputed one (e.g. one grid shared by deconv_form="exact" and "taylor")
+        # precomputed one
         if tech_grid is not None:
             df_grid = tech_grid
         else:
@@ -312,7 +296,7 @@ def estimate_phase_desynchrony(
 
     if sigma_tech_method == "deconvolution":
         # 2a'''. Deconvolved floor: full Fourier series of f(phi_k), then solve
-        # V_b = T_b(sigma) + sigma^2 per group (see scritmo.ml.deconvolution).
+        # V_b = T_b(sigma) + sigma^2 per group (see scritmo.ml.desync.deconvolution).
         _gcols = group_cols if group_cols is not None else ["context", "sample_name"]
         deconv_table, deconv_diag = aggregate_technical_deconvolution(
             df_grid,
@@ -326,14 +310,13 @@ def estimate_phase_desynchrony(
             use_circular_mean=use_circular_mean,
             debias_mean=debias_mean,
             period=period,
-            deconv_form=deconv_form,
         )
         if return_deconv_diagnostics:
             model.deconv_diag = deconv_diag
         tech_agg = deconv_table[_gcols + ["Technical_cSTD", "Technical_R"]]
         df_sim = None
         print(
-            f"  deconvolution floor ({deconv_form}): flags "
+            f"  deconvolution floor: flags "
             f"{deconv_table['deconv_flag'].value_counts().to_dict()}"
         )
     else:

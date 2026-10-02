@@ -7,65 +7,28 @@ Inside one group b (one population / sample), the law of total variance is exact
 
 where V_b is the observed spread of the inferred phases (cSTD², rad²) and f(θ) is the
 technical variance of a perfectly synchronized population at true phase θ. The
-per-group "twin" (Eq. 14, ``sigma_tech_method="simulation"``) reads f at ONE point,
+per-group "twin" (``sigma_tech_method="simulation"``) reads f at ONE point,
 
     σ̂²_bio,b = V_b − f(μ_b),
 
 i.e. it replaces the bump of true phases p_b by a spike at its centre. Because f is
-curved, T_b ≠ f(μ_b) and the error is ≈ ½ σ²_bio,b f''(μ_b) (approximation A1).
+curved, and because the inferred phase is biased towards attractors, this misses the
+smoothing of f (½ σ²_bio f''), the attractor-bias terms (σ²(2β'+β'²), β = m(θ) − θ), the
+placement term and the circular log-Jensen term (−¼ f'² σ²).
 
-This module removes A1 by deconvolving the bump explicitly:
-
-1. Measure f on a uniform grid of n_grid phases φ_k with the σ=0 twin grid
-   (:func:`scritmo.ml.simulations.simulate_technical_grid`):
-   f(φ_k) = mean over runs of cSTD(post_mode)² (mean of per-run variances, so the
-   finite-n bias matches a data group of the same size).
-2. Real DFT on the uniform grid, keeping ALL harmonics up to Nyquist (J = n_grid // 2):
-
-       f(θ) = f_0 + Σ_{j=1}^{J} [a_j cos jθ + b_j sin jθ],
-       f_0 = (1/N) Σ_k f_k,
-       a_j = (2/N) Σ_k f_k cos jφ_k,   b_j = (2/N) Σ_k f_k sin jφ_k   (j < N/2),
-       a_{N/2} = (1/N) Σ_k f_k cos(N/2 φ_k), b_{N/2} = (1/N) Σ_k f_k sin(N/2 φ_k)
-       (Nyquist, even N: half weight).
-
-   This is the trigonometric interpolant: it reproduces f_k exactly at every grid phase.
-3. Wrapped-normal bump of width σ (rad): κ_j(σ) = exp(−j²σ²/2), and
-
-       T_b(σ) = f_0 + Σ_j κ_j(σ) [a_j cos jμ_b + b_j sin jμ_b],   T_b(0) = f(μ_b).
-
-4. ``exact`` form: solve h(σ) = T_b(σ) + σ² = V_b for σ ∈ [0, σ_max] (brentq).
-   dh/dσ = σ [2 − Σ_j j² κ_j(σ) c_j(μ_b)],  c_j(μ) = a_j cos jμ + b_j sin jμ.
-   Identified ("ok") iff h − V_b has exactly one sign change on a dense scan of
-   [0, σ_max] and dh/dσ > 0 at the root. Otherwise σ̂ = NaN with a flag:
-     "below_floor"   V_b < h(σ) everywhere (V_b < f(μ_b), no crossing),
-     "no_root"       V_b > h(σ_max),
-     "non_monotone"  several crossings, or dh/dσ ≤ 0 at the root.
-   No clamping is done here.
-5. ``taylor`` form (closed, first order in σ²):
-
-       σ̂² = (V_b − f(μ_b)) / (1 + ½ f''(μ_b)),   f''(μ) = −Σ_j j² c_j(μ).
-
-   NaN + flag "denominator" if 1 + ½ f'' ≤ eps, "below_floor" if V_b < f(μ_b),
-   "negative_tech" if σ̂² > V_b (implied technical term would be negative).
-6. Implied technical term: exact → T_b(σ̂_b); taylor → V_b − σ̂²_b. In both cases
-   V_b = Tech_b + σ̂²_b per group by construction, so the Shell-2 pool in
-   :func:`scritmo.ml.analysis_utils.desync_means` (mean V − mean Tech) equals the
-   weighted mean of σ̂²_b over the identified groups.
-
-VECTOR form (``deconv_form="vector"``) — the forms above model only the smoothing of f
-(approximation A1). The twin's real per-group error also contains the attractor-bias terms
-(A2: σ²(2β'+β'²), β = m(θ) − θ), the placement term (A3) and the circular log-Jensen term
-(−¼ f'² σ²). All of them are exact consequences of ONE first-moment identity (law of total
-expectation, note §6a):
+This module removes all of them with ONE first-moment identity (law of total
+expectation):
 
     E_b[e^{iθ̂}] = E_{θ~p_b}[ρ(θ)],     ρ(θ) = E[e^{iθ̂} | θ] = r(θ) e^{i m(θ)}.
 
-1. From the grid: ρ(φ_k) = plain mean of exp(i·post_mode) over ALL twin cells at φ_k (runs
-   pooled) — unbiased at any n, and it keeps the DIRECTION m(θ) (the attractor bias).
+1. From the σ=0 twin grid (:func:`scritmo.ml.simulations.simulate_technical_grid`):
+   ρ(φ_k) = plain mean of exp(i·post_mode) over ALL twin cells at φ_k (runs pooled) —
+   unbiased at any n, and it keeps the DIRECTION m(θ) (the attractor bias).
 2. Complex DFT on the uniform grid: ρ(θ) = Σ_{j=-J..J} c_j e^{ijθ}; for even N the Nyquist
    coefficient is split half/half between j = ±N/2 so the series interpolates ρ_k exactly
    and is smoothed symmetrically.
-3. ρ̄_b(σ) = Σ_j c_j κ_{|j|}(σ) e^{ijμ_b}  (wrapped-normal bump around μ_b).
+3. Wrapped-normal bump of width σ (rad), κ_j(σ) = exp(−j²σ²/2):
+   ρ̄_b(σ) = Σ_j c_j κ_{|j|}(σ) e^{ijμ_b}.
 4. Data: z̄_b = mean over the n_b cells of exp(i·post_mode), R̄²_b = |z̄_b|²
    (= exp(−Data_cSTD²), since cSTD = √(−2 ln R̄)).
 5. Solve  L(σ) = |ρ̄_b(σ)|² + (1 − |ρ̄_b(σ)|²)/n_b = R̄²_b  for σ ∈ [0, σ_max]. The 1/n_b term
@@ -75,6 +38,9 @@ expectation, note §6a):
    R̄² < L(σ_max); "non_monotone": several crossings / dL/dσ ≥ 0 at the root.
 6. Implied technical term: Tech² = Data_cSTD² − σ̂² (NaN when σ̂ > Data_cSTD, which can happen
    because −2 ln R̄ is not additive when r(θ) varies; σ̂ itself is kept).
+
+The scalar variance curve f(φ_k) = mean over runs of cSTD(post_mode)² and its real Fourier
+series are kept only for the single-point twin floor f(μ_b) reported next to the solution.
 
 All angles are radians, all variances rad² (convert with ``scritmo.rh`` at the end).
 """
@@ -87,11 +53,7 @@ from scipy.stats import circmean
 import scritmo as sr
 from scritmo import cstd2R
 
-DECONV_FLAGS = (
-    "ok", "below_floor", "non_monotone", "no_root",  # exact / vector
-    "denominator", "negative_tech",                   # taylor only
-)
-DECONV_FORMS = ("exact", "taylor", "vector")
+DECONV_FLAGS = ("ok", "below_floor", "non_monotone", "no_root")
 
 
 # ---------------------------------------------------------------------------
@@ -173,147 +135,6 @@ def eval_fourier(theta, coef):
 def f_at(mu, coef):
     """f(μ) = T(μ, σ=0): the single-point twin floor read from the series."""
     return float(coef["f0"] + np.sum(_c_j(mu, coef)))
-
-
-def f_second_derivative(mu, coef):
-    """f''(μ) = −Σ_j j² c_j(μ)."""
-    return float(-np.sum(coef["j"] ** 2 * _c_j(mu, coef)))
-
-
-def technical_term(mu, sigma, coef):
-    """T(μ, σ) = f_0 + Σ_j κ_j(σ) c_j(μ): f averaged under a wrapped normal N(μ, σ)."""
-    return float(coef["f0"] + np.sum(kappa_wrapped_normal(coef["j"], sigma) * _c_j(mu, coef)))
-
-
-def _h_and_dh(mus, weights, coef):
-    """Build h(σ) = Σ_b w_b T(μ_b, σ) + σ² and its derivative, vectorised in σ.
-
-    With a single (μ, w=1) this is the per-group h of the exact form; with several it is
-    the pooled ("common-σ") version Σ_b w_b V_b = Σ_b w_b T_b(σ) + σ².
-    """
-    mus = np.atleast_1d(np.asarray(mus, dtype=float))
-    w = np.atleast_1d(np.asarray(weights, dtype=float))
-    w = w / w.sum()
-    j = coef["j"].astype(float)
-    # weighted c_j over groups: C_j = Σ_b w_b c_j(μ_b)
-    C = (w[:, None] * (coef["a"][None, :] * np.cos(np.outer(mus, j))
-                       + coef["b"][None, :] * np.sin(np.outer(mus, j)))).sum(0)
-
-    def h(s):
-        s = np.asarray(s, dtype=float)
-        k = np.exp(-0.5 * np.multiply.outer(s**2, j**2))
-        return coef["f0"] + k @ C + s**2
-
-    def dh(s):
-        s = np.asarray(s, dtype=float)
-        k = np.exp(-0.5 * np.multiply.outer(s**2, j**2))
-        return s * (2.0 - k @ (j**2 * C))
-
-    return h, dh
-
-
-def _solve_monotone(h, dh, V, sigma_max, n_scan):
-    """Unique root of h(σ) = V on [0, σ_max]. Returns (σ̂, flag, n_crossings, monotone)."""
-    s = np.linspace(0.0, sigma_max, int(n_scan))
-    g = h(s) - V
-    monotone = bool(np.all(np.diff(h(s)) > 0))
-    pos = g >= 0
-    idx = np.flatnonzero(pos[1:] != pos[:-1])
-    n_cross = int(idx.size)
-    if n_cross == 0:
-        if g[0] == 0.0:
-            return 0.0, "ok", 0, monotone
-        return np.nan, ("below_floor" if g[0] > 0 else "no_root"), 0, monotone
-    if n_cross > 1 or g[0] > 0:
-        # several crossings, or h starts ABOVE V and still crosses (so it dips below V)
-        return np.nan, "non_monotone", n_cross, monotone
-    i = int(idx[0])
-    root = brentq(lambda x: float(h(x) - V), s[i], s[i + 1], xtol=1e-14, rtol=1e-14)
-    if not float(dh(root)) > 0.0:
-        return np.nan, "non_monotone", n_cross, monotone
-    return float(root), "ok", n_cross, monotone
-
-
-def solve_exact(V, mu, coef, sigma_max=np.pi, n_scan=4001):
-    """Exact deconvolution for one group: solve T(μ, σ) + σ² = V for σ ≥ 0.
-
-    Parameters
-    ----------
-    V : float
-        Observed variance of the group's inferred phases (cSTD², rad²).
-    mu : float
-        Group phase (rad) — the same phase the twin would be generated at.
-    coef : dict
-        Output of :func:`grid_fourier_coefficients`.
-    sigma_max : float, default π
-        Upper end of the bracket (rad; π = 12 h).
-    n_scan : int, default 4001
-        Dense-scan resolution used to count crossings (identifiability check).
-
-    Returns
-    -------
-    dict
-        ``sigma`` (rad, NaN unless flag == "ok"), ``flag``, ``n_crossings``,
-        ``monotone`` (h strictly increasing on the whole scan), ``T_hat`` = T(μ, σ̂).
-    """
-    h, dh = _h_and_dh([mu], [1.0], coef)
-    sig, flag, n_cross, mono = _solve_monotone(h, dh, float(V), sigma_max, n_scan)
-    return {
-        "sigma": sig,
-        "flag": flag,
-        "n_crossings": n_cross,
-        "monotone": mono,
-        "T_hat": technical_term(mu, sig, coef) if flag == "ok" else np.nan,
-    }
-
-
-def solve_taylor(V, mu, coef, eps=1e-3):
-    """First-order closed form σ̂² = (V − f(μ)) / (1 + ½ f''(μ)).
-
-    Returns
-    -------
-    dict
-        ``sigma`` (rad, NaN unless "ok"),
-        ``flag`` ∈ {"ok", "below_floor", "denominator", "negative_tech"},
-        ``denominator`` = 1 + ½ f''(μ), ``T_hat`` = V − σ̂² (implied technical term).
-    """
-    num = float(V) - f_at(mu, coef)
-    den = 1.0 + 0.5 * f_second_derivative(mu, coef)
-    if not den > eps:
-        return {"sigma": np.nan, "flag": "denominator", "denominator": den, "T_hat": np.nan}
-    if num < 0:
-        return {"sigma": np.nan, "flag": "below_floor", "denominator": den, "T_hat": np.nan}
-    s2 = num / den
-    if float(V) - s2 < 0:
-        # den < 1 (f'' < 0, near a peak of f) can push σ̂² above V itself: the implied
-        # technical term would be negative, so the split is not interpretable.
-        return {"sigma": np.nan, "flag": "negative_tech", "denominator": den,
-                "T_hat": np.nan}
-    return {"sigma": float(np.sqrt(s2)), "flag": "ok", "denominator": den,
-            "T_hat": float(V) - s2}
-
-
-def solve_common_sigma(V, mus, weights, coef, sigma_max=np.pi, n_scan=4001):
-    """Pooled (Shell-2) deconvolution with ONE σ for all groups:
-
-        Σ_b w_b V_b = Σ_b w_b T(μ_b, σ) + σ².
-
-    ``V``, ``mus``, ``weights`` are per-group arrays (weights need not be normalised).
-    Returns the same dict as :func:`solve_exact` (``T_hat`` = Σ_b w_b T(μ_b, σ̂)).
-    """
-    V = np.asarray(V, dtype=float)
-    w = np.asarray(weights, dtype=float)
-    Vbar = float(np.sum(w * V) / np.sum(w))
-    h, dh = _h_and_dh(mus, w, coef)
-    sig, flag, n_cross, mono = _solve_monotone(h, dh, Vbar, sigma_max, n_scan)
-    return {
-        "sigma": sig,
-        "flag": flag,
-        "n_crossings": n_cross,
-        "monotone": mono,
-        "T_hat": float(h(sig) - sig**2) if flag == "ok" else np.nan,
-        "V_bar": Vbar,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -600,10 +421,8 @@ def aggregate_technical_deconvolution(
     debias_mean: bool = False,
     ext_time_col: str = "ext_time_hours",
     period: float = 24.0,
-    deconv_form: str = "vector",
     sigma_max: float = np.pi,
     n_scan: int = 4001,
-    taylor_eps: float = 1e-3,
     n_harmonics: int | None = None,
 ):
     """Deconvolution technical floor, same schema as `aggregate_simulated_results`
@@ -625,8 +444,7 @@ def aggregate_technical_deconvolution(
          direction of the grid, μ_b = :func:`debias_phase`, which removes the shift of the
          inferred mean by the attractor bias; groups where it fails keep the circular mean
          (``deconv_debias_ok`` False).
-      4. Solve per row with :func:`solve_exact`, :func:`solve_taylor` or, for
-         ``deconv_form="vector"``, :func:`solve_vector` on the complex resultant of the grid
+      4. Solve per row with :func:`solve_vector` on the complex resultant of the grid
          (R̄² = exp(−Data_cSTD²), n = group_size; see the module docstring).
 
     Returns
@@ -634,20 +452,17 @@ def aggregate_technical_deconvolution(
     (table, diag) : (pandas.DataFrame, dict)
         ``table`` columns: group cols, Technical_cSTD (rad; implied, NaN if not
         identified), Technical_R, deconv_sigma (rad, NaN if not identified),
-        deconv_flag, deconv_V, deconv_mu (rad), deconv_f_mu (= T(μ,0), rad²),
-        deconv_f2_mu (f''(μ)), deconv_T_hat (rad²), deconv_denominator (taylor) /
-        deconv_n_crossings (exact, vector). Vector adds deconv_R2, deconv_n,
+        deconv_flag, deconv_V, deconv_mu (rad), deconv_f_mu (= f(μ), rad²),
+        deconv_T_hat (rad²), deconv_n_crossings, deconv_R2, deconv_n,
         deconv_rho0_abs (|ρ̄(0)|), deconv_L0, deconv_pred_dir (arg ρ̄(σ̂)),
         deconv_data_dir (circmean of the group's inferred phases, sample level) and
         deconv_neg_tech (σ̂ > Data_cSTD, implied Tech undefined).
-        ``diag``: {context: {"curve", "per_run", "coef"}}.
+        ``diag``: {context: {"curve", "per_run", "coef", "rho_curve", "cc"}}.
     """
     from .results import aggregate_real_results  # local: avoid import cycle
 
     if group_cols is None:
         group_cols = ["context", "sample_name"]
-    if deconv_form not in DECONV_FORMS:
-        raise ValueError(f"deconv_form must be one of {DECONV_FORMS}, got {deconv_form!r}")
     if debias_mean and not use_circular_mean:
         raise ValueError("debias_mean=True corrects the circular mean; it needs "
                          "use_circular_mean=True (with False, μ_b is the external time)")
@@ -664,13 +479,12 @@ def aggregate_technical_deconvolution(
             "per_run": per_run[per_run.context == ctx].reset_index(drop=True),
             "coef": coef,
         }
-    if deconv_form == "vector" or debias_mean:
-        rcurve = grid_resultant_curve(df_grid, post_estimator=post_estimator)
-        for ctx, c in rcurve.groupby("context"):
-            diag[str(ctx)]["rho_curve"] = c.reset_index(drop=True)
-            diag[str(ctx)]["cc"] = grid_complex_fourier(
-                c["grid_phase"].values, c["rho_re"].values + 1j * c["rho_im"].values
-            )
+    rcurve = grid_resultant_curve(df_grid, post_estimator=post_estimator)
+    for ctx, c in rcurve.groupby("context"):
+        diag[str(ctx)]["rho_curve"] = c.reset_index(drop=True)
+        diag[str(ctx)]["cc"] = grid_complex_fourier(
+            c["grid_phase"].values, c["rho_re"].values + 1j * c["rho_im"].values
+        )
 
     # --- 2. V_b exactly as desync_results will compute Data_cSTD ---
     real_agg = aggregate_real_results(
@@ -728,27 +542,18 @@ def aggregate_technical_deconvolution(
         mu = mu_of[mu_key]
         V = float(r["Data_cSTD"]) ** 2
         f_mu = f_at(mu, coef)
-        f2 = f_second_derivative(mu, coef)
-        if deconv_form == "exact":
-            sol = solve_exact(V, mu, coef, sigma_max=sigma_max, n_scan=n_scan)
-            extra = {"deconv_n_crossings": sol["n_crossings"],
-                     "deconv_monotone": sol["monotone"]}
-        elif deconv_form == "vector":
-            n_b = float(r["group_size"])
-            R2 = float(np.exp(-V))  # cSTD = sqrt(-2 ln R)  ->  R^2 = exp(-cSTD^2)
-            sol = solve_vector(R2, n_b, mu, diag[ctx]["cc"], sigma_max=sigma_max,
-                               n_scan=n_scan)
-            sig = sol["sigma"]
-            sol["T_hat"] = (V - sig**2) if sol["flag"] == "ok" else np.nan
-            extra = {"deconv_n_crossings": sol["n_crossings"],
-                     "deconv_R2": R2, "deconv_n": n_b,
-                     "deconv_rho0_abs": sol["rho0_abs"], "deconv_L0": sol["L0"],
-                     "deconv_pred_dir": sol["pred_dir"],
-                     "deconv_data_dir": dir_of[mu_key],
-                     "deconv_neg_tech": bool(sol["flag"] == "ok" and V - sig**2 < 0)}
-        else:
-            sol = solve_taylor(V, mu, coef, eps=taylor_eps)
-            extra = {"deconv_denominator": sol["denominator"]}
+        n_b = float(r["group_size"])
+        R2 = float(np.exp(-V))  # cSTD = sqrt(-2 ln R)  ->  R^2 = exp(-cSTD^2)
+        sol = solve_vector(R2, n_b, mu, diag[ctx]["cc"], sigma_max=sigma_max,
+                           n_scan=n_scan)
+        sig = sol["sigma"]
+        sol["T_hat"] = (V - sig**2) if sol["flag"] == "ok" else np.nan
+        extra = {"deconv_n_crossings": sol["n_crossings"],
+                 "deconv_R2": R2, "deconv_n": n_b,
+                 "deconv_rho0_abs": sol["rho0_abs"], "deconv_L0": sol["L0"],
+                 "deconv_pred_dir": sol["pred_dir"],
+                 "deconv_data_dir": dir_of[mu_key],
+                 "deconv_neg_tech": bool(sol["flag"] == "ok" and V - sig**2 < 0)}
         if debias_mean:
             extra["deconv_debias_ok"] = debias_ok.get(mu_key, False)
         T_hat = sol["T_hat"]
@@ -762,9 +567,7 @@ def aggregate_technical_deconvolution(
                 deconv_V=V,
                 deconv_mu=mu,
                 deconv_f_mu=f_mu,
-                deconv_f2_mu=f2,
                 deconv_T_hat=T_hat,
-                deconv_form=deconv_form,
                 **extra,
             )
         )
