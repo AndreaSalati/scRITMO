@@ -49,7 +49,7 @@ def estimate_phase_desynchrony(
     n_grid: int = 24,
     n_cells_per_gridpoint: int = 1000,
     # --- Deconvolution floor arguments ---
-    deconv_form: str = "exact",
+    deconv_form: str = "vector",
     return_deconv_diagnostics: bool = False,
     tech_grid=None,
     # --- Cell filtering / weighting ---
@@ -156,7 +156,7 @@ def estimate_phase_desynchrony(
         (deconvolution) Twin cells simulated per (grid point, run). For
         deconvolution, match it to the typical group size n_b: f(φ_k) is a mean of
         per-run cSTD², so its finite-n bias then matches the data's V_b.
-    deconv_form : {"exact", "taylor", "vector"}, default "exact"
+    deconv_form : {"exact", "taylor", "vector"}, default "vector"
         (deconvolution method) "exact" solves T_b(σ) + σ² = V_b on [0, π] with brentq
         and returns NaN with ``deconv_flag`` ∈ {"below_floor", "no_root",
         "non_monotone"} when σ is not identified (h − V_b must cross zero exactly

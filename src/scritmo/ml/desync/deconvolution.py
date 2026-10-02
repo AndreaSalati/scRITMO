@@ -464,6 +464,71 @@ def solve_vector(R2, n, mu, cc, sigma_max=np.pi, n_scan=4001):
     return out
 
 
+# ---------------------------------------------------------------------------
+# VECTOR form, ONE σ shared by all groups
+# ---------------------------------------------------------------------------
+def solve_vector_shared(R2, n, mus, cc, weights=None, sigma_max=np.pi, n_scan=4001):
+    """One σ for all groups, from the sum of the per-group equations of :func:`solve_vector`:
+
+        G(σ) = Σ_b a_b [ L_b(σ) − R̄²_b ] = 0,   L_b(σ) = |ρ̄_b(σ)|² + (1 − |ρ̄_b(σ)|²)/n_b,
+
+    with ρ̄_b(σ) = Σ_j c_j κ_|j|(σ) e^{ijμ_b} and a_b = n_b by default. For σ_bio shared by
+    all groups, this replaces the Shell-2 average of the per-group solutions (Eq. 16): the
+    group equations are added before the (nonlinear) solve, so their noise cancels first and
+    the clip at σ = 0 happens once, not once per group. E[R̄²_b] = L_b(σ_bio) exactly for
+    i.i.d. cells, so E[G(σ_bio)] = 0. When σ_bio,b differs between groups, σ̂² is to first
+    order the mean of σ²_bio,b weighted by a_b·(−∂L_b/∂σ²) ≈ n_b |ρ̄_b|², not by n_b.
+
+    Parameters
+    ----------
+    R2, n, mus : array-like, one value per group
+        |z̄_b|², group size n_b, group phase μ_b (rad).
+    cc : dict
+        Output of :func:`grid_complex_fourier`.
+    weights : array-like or None
+        a_b (default n_b).
+
+    Returns
+    -------
+    dict
+        ``sigma`` (rad, NaN unless "ok"), ``flag`` ("ok"; "below_floor" when the data of all
+        groups together are tighter than the σ = 0 prediction; "no_root"; "non_monotone"
+        for several sign changes or dG/dσ ≥ 0 at the root), ``n_crossings``.
+    """
+    R2 = np.asarray(R2, dtype=float)
+    n = np.asarray(n, dtype=float)
+    mus = np.asarray(mus, dtype=float)
+    a = n.copy() if weights is None else np.asarray(weights, dtype=float)
+    inv_n = np.where(np.isfinite(n), 1.0 / n, 0.0)
+    j = cc["j"].astype(float)
+    E = cc["c"][:, None] * np.exp(1j * np.outer(j, mus))  # c_j e^{ijμ_b}, (J, B)
+
+    def G(sv):
+        k = np.exp(-0.5 * np.multiply.outer(np.atleast_1d(sv) ** 2, j**2))  # (S, J)
+        L = (1.0 - inv_n) * np.abs(k @ E) ** 2 + inv_n
+        return (L - R2[None, :]) @ a
+
+    s = np.linspace(0.0, sigma_max, int(n_scan))
+    g = G(s)
+    neg = g < 0
+    idx = np.flatnonzero(neg[1:] != neg[:-1])
+    out = {"sigma": np.nan, "n_crossings": int(idx.size)}
+    if idx.size == 0:
+        out["flag"] = "below_floor" if g[0] < 0 else "no_root"
+        return out
+    if idx.size > 1 or g[0] < 0:
+        out["flag"] = "non_monotone"
+        return out
+    i = int(idx[0])
+    root = brentq(lambda x: float(G(x)[0]), s[i], s[i + 1], xtol=1e-14, rtol=1e-14)
+    h = 1e-6
+    if not float(G(root + h)[0] - G(max(root - h, 0.0))[0]) < 0.0:
+        out["flag"] = "non_monotone"
+        return out
+    out.update(sigma=float(root), flag="ok")
+    return out
+
+
 def grid_resultant_curve(df_grid, post_estimator="post_mode"):
     """Per context and grid phase: ρ(φ_k) = mean of exp(i·post_estimator) over ALL twin cells
     at φ_k (runs pooled). A plain mean, so unbiased at any n.
@@ -535,7 +600,7 @@ def aggregate_technical_deconvolution(
     debias_mean: bool = False,
     ext_time_col: str = "ext_time_hours",
     period: float = 24.0,
-    deconv_form: str = "exact",
+    deconv_form: str = "vector",
     sigma_max: float = np.pi,
     n_scan: int = 4001,
     taylor_eps: float = 1e-3,
