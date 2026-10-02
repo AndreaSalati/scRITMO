@@ -467,155 +467,66 @@ def solve_vector(R2, n, mu, cc, sigma_max=np.pi, n_scan=4001):
 # ---------------------------------------------------------------------------
 # VECTOR form, ONE σ shared by all groups
 # ---------------------------------------------------------------------------
-# Shell 2 of Eq. 16 averages the per-group solutions σ̂²_b. When σ_bio is the same in every
-# group, we can instead write one moment condition per group and solve them together for
-# the single σ. Two variants:
-#   B (lengths)  Σ_b a_b [L_b(σ) − R̄²_b] = 0,  L_b as in solve_vector, μ_b fixed.
-#   A (complex)  min_{σ,δ} Σ_b W_b |z̄_b − ρ̄(σ, μ_b + δ)|²,  δ = one global rotation
-#                (phase origin of the model vs ZT). z̄_b is unbiased for ρ̄_b, so no
-#                finite-n correction is needed.
-def _rho_bar_groups(s, mus, cc):
-    """ρ̄_b(σ) = Σ_j c_j κ_|j|(σ) e^{ijμ_b} and ∂ρ̄_b/∂(σ²), shape (n_σ, n_groups)."""
-    s = np.atleast_1d(np.asarray(s, dtype=float))
-    j = cc["j"].astype(float)
-    k = np.exp(-0.5 * np.multiply.outer(s**2, j**2))                   # (S, J)
-    E = cc["c"][:, None] * np.exp(1j * np.outer(j, np.asarray(mus, dtype=float)))  # (J, B)
-    return k @ E, (k * (-0.5 * j**2)[None, :]) @ E
+def solve_vector_shared(R2, n, mus, cc, weights=None, sigma_max=np.pi, n_scan=4001):
+    """One σ for all groups, from the sum of the per-group equations of :func:`solve_vector`:
 
+        G(σ) = Σ_b a_b [ L_b(σ) − R̄²_b ] = 0,   L_b(σ) = |ρ̄_b(σ)|² + (1 − |ρ̄_b(σ)|²)/n_b,
 
-def _var_R2(rho_abs, n):
-    """Approximate variance of |z̄|² for n i.i.d. cells with mean resultant length R.
-
-    Delta method with a wrapped-normal second moment (R₂ = R⁴): 2R²(1 − R²)²/n, plus the
-    (1 − R²)²/n² term that dominates when R → 0 (|z̄|² is then ≈ exponential, mean 1/n).
-    """
-    R2 = np.asarray(rho_abs, dtype=float) ** 2
-    n = np.asarray(n, dtype=float)
-    return 2.0 * R2 * (1.0 - R2) ** 2 / n + (1.0 - R2) ** 2 / n**2
-
-
-def solve_vector_shared(R2, n, mus, cc, weights=None, efficient=False, sigma_max=np.pi,
-                        n_scan=4001):
-    """Variant B: one σ for all groups from the sum of the per-group length equations,
-
-        G(σ) = Σ_b a_b [ L_b(σ) − R̄²_b ] = 0,   L_b(σ) = |ρ̄_b(σ)|² + (1 − |ρ̄_b(σ)|²)/n_b.
+    with ρ̄_b(σ) = Σ_j c_j κ_|j|(σ) e^{ijμ_b} and a_b = n_b by default. For σ_bio shared by
+    all groups, this replaces the Shell-2 average of the per-group solutions (Eq. 16): the
+    group equations are added before the (nonlinear) solve, so their noise cancels first and
+    the clip at σ = 0 happens once, not once per group. E[R̄²_b] = L_b(σ_bio) exactly for
+    i.i.d. cells, so E[G(σ_bio)] = 0. When σ_bio,b differs between groups, σ̂² is to first
+    order the mean of σ²_bio,b weighted by a_b·(−∂L_b/∂σ²) ≈ n_b |ρ̄_b|², not by n_b.
 
     Parameters
     ----------
     R2, n, mus : array-like, one value per group
-        |z̄_b|², group size, group phase μ_b (rad).
+        |z̄_b|², group size n_b, group phase μ_b (rad).
     cc : dict
         Output of :func:`grid_complex_fourier`.
     weights : array-like or None
-        a_b for the simple form (default n_b).
-    efficient : bool
-        Two-step: solve with ``weights``, then re-solve with
-        a_b = −∂L_b/∂(σ²) / Var(R̄²_b), both evaluated at the first solution (the optimal
-        weights of a one-parameter moment estimator). Falls back to the first step if it
-        did not give a root.
+        a_b (default n_b).
 
     Returns
     -------
     dict
-        ``sigma`` (rad, NaN unless "ok"), ``flag`` ("ok", "below_floor", "no_root",
-        "non_monotone"), ``n_crossings``, ``step1_sigma``, ``weights`` (the a_b used).
+        ``sigma`` (rad, NaN unless "ok"), ``flag`` ("ok"; "below_floor" when the data of all
+        groups together are tighter than the σ = 0 prediction; "no_root"; "non_monotone"
+        for several sign changes or dG/dσ ≥ 0 at the root), ``n_crossings``.
     """
     R2 = np.asarray(R2, dtype=float)
     n = np.asarray(n, dtype=float)
     mus = np.asarray(mus, dtype=float)
     a = n.copy() if weights is None else np.asarray(weights, dtype=float)
     inv_n = np.where(np.isfinite(n), 1.0 / n, 0.0)
-    s = np.linspace(0.0, sigma_max, int(n_scan))
+    j = cc["j"].astype(float)
+    E = cc["c"][:, None] * np.exp(1j * np.outer(j, mus))  # c_j e^{ijμ_b}, (J, B)
 
-    def G(sv, a):
-        rb, _ = _rho_bar_groups(sv, mus, cc)
-        L = (1.0 - inv_n) * np.abs(rb) ** 2 + inv_n
+    def G(sv):
+        k = np.exp(-0.5 * np.multiply.outer(np.atleast_1d(sv) ** 2, j**2))  # (S, J)
+        L = (1.0 - inv_n) * np.abs(k @ E) ** 2 + inv_n
         return (L - R2[None, :]) @ a
 
-    def solve(a):
-        g = G(s, a)
-        neg = g < 0
-        idx = np.flatnonzero(neg[1:] != neg[:-1])
-        out = {"sigma": np.nan, "n_crossings": int(idx.size)}
-        if idx.size == 0:
-            out["flag"] = "below_floor" if g[0] < 0 else "no_root"
-        elif idx.size > 1 or g[0] < 0:
-            out["flag"] = "non_monotone"
-        else:
-            i = int(idx[0])
-            out["sigma"] = float(brentq(lambda x: float(G(x, a)[0]), s[i], s[i + 1],
-                                        xtol=1e-14, rtol=1e-14))
-            out["flag"] = "ok"
+    s = np.linspace(0.0, sigma_max, int(n_scan))
+    g = G(s)
+    neg = g < 0
+    idx = np.flatnonzero(neg[1:] != neg[:-1])
+    out = {"sigma": np.nan, "n_crossings": int(idx.size)}
+    if idx.size == 0:
+        out["flag"] = "below_floor" if g[0] < 0 else "no_root"
         return out
-
-    out = solve(a)
-    out["step1_sigma"] = out["sigma"]
-    out["weights"] = a
-    if efficient and out["flag"] == "ok":
-        rb, drb = _rho_bar_groups(out["sigma"], mus, cc)
-        rb, drb = rb[0], drb[0]
-        dL = (1.0 - inv_n) * 2.0 * np.real(np.conj(rb) * drb)  # ∂L_b/∂(σ²) ≤ 0
-        a_eff = -dL / _var_R2(np.abs(rb), n)
-        out2 = solve(a_eff)
-        if out2["flag"] == "ok":
-            out2["step1_sigma"] = out["sigma"]
-            out2["weights"] = a_eff
-            out = out2
+    if idx.size > 1 or g[0] < 0:
+        out["flag"] = "non_monotone"
+        return out
+    i = int(idx[0])
+    root = brentq(lambda x: float(G(x)[0]), s[i], s[i + 1], xtol=1e-14, rtol=1e-14)
+    h = 1e-6
+    if not float(G(root + h)[0] - G(max(root - h, 0.0))[0]) < 0.0:
+        out["flag"] = "non_monotone"
+        return out
+    out.update(sigma=float(root), flag="ok")
     return out
-
-
-def fit_vector_shared_complex(zbar, n, mus, cc, sigma_max=np.pi, delta_max=np.pi / 4,
-                              n_sigma=241, n_delta=121, fit_delta=True):
-    """Variant A: shared σ and one global rotation δ from the complex group means,
-
-        (σ̂, δ̂) = argmin Σ_b W_b |z̄_b − ρ̄(σ, μ_b + δ)|²,
-
-    first with W_b = n_b, then once more with W_b = n_b / (1 − |ρ̄_b|²) at the first
-    solution (inverse variance of z̄_b, held fixed so it cannot pull σ). Dense grid over
-    (σ, δ), then L-BFGS-B from the best grid point.
-
-    Returns
-    -------
-    dict
-        ``sigma`` (rad, ≥ 0), ``delta`` (rad), ``Q`` (objective), ``flag`` ("ok", or
-        "at_zero" when σ̂ = 0, or "delta_at_bound").
-    """
-    from scipy.optimize import minimize
-
-    zbar = np.asarray(zbar, dtype=complex)
-    n = np.asarray(n, dtype=float)
-    mus = np.asarray(mus, dtype=float)
-    j = cc["j"].astype(float)
-    sg = np.linspace(0.0, sigma_max, int(n_sigma))
-    dg = np.linspace(-delta_max, delta_max, int(n_delta)) if fit_delta else np.zeros(1)
-    K = np.exp(-0.5 * np.multiply.outer(sg**2, j**2))                    # (S, J)
-    P = np.exp(1j * j[None, :, None] * (mus[None, None, :] + dg[:, None, None]))  # (D, J, B)
-
-    def Q(params, W):
-        sig, dl = params
-        k = np.exp(-0.5 * sig**2 * j**2)
-        rb = (cc["c"] * k) @ np.exp(1j * np.outer(j, mus + dl))
-        return float(np.sum(W * np.abs(zbar - rb) ** 2))
-
-    def fit(W):
-        rb = np.einsum("sj,j,djb->sdb", K, cc["c"], P)                  # (S, D, B)
-        q = np.sum(W * np.abs(zbar[None, None, :] - rb) ** 2, axis=-1)
-        i, k = np.unravel_index(np.argmin(q), q.shape)
-        bounds = [(0.0, sigma_max), (-delta_max, delta_max) if fit_delta else (0.0, 0.0)]
-        res = minimize(Q, x0=[sg[i], dg[k]], args=(W,), method="L-BFGS-B", bounds=bounds)
-        return float(res.x[0]), float(res.x[1]), float(res.fun)
-
-    sig, dl, _ = fit(n)
-    k = np.exp(-0.5 * sig**2 * j**2)
-    rb = (cc["c"] * k) @ np.exp(1j * np.outer(j, mus + dl))
-    W = n / np.maximum(1.0 - np.abs(rb) ** 2, 1e-6)
-    sig, dl, q = fit(W)
-    flag = "ok"
-    if sig <= 1e-6:
-        flag = "at_zero"
-    elif fit_delta and abs(abs(dl) - delta_max) < 1e-6:
-        flag = "delta_at_bound"
-    return {"sigma": sig, "delta": dl, "Q": q, "flag": flag}
 
 
 def grid_resultant_curve(df_grid, post_estimator="post_mode"):
