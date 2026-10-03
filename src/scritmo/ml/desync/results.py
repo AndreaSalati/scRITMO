@@ -110,9 +110,10 @@ def desync_results(
     """
     First it aggregates data by calling aggregate_real_results and aggregate_simulated_results,
     then fuses the 2 in one dataframe. Finally it computes the
-    biological desynchrony with the quadrature difference.
+    biological desynchrony as the difference of the data and technical variances (the
+    "subtraction" estimator).
 
-    `sim_agg` lets a caller bypass the simulation twin: pass a precomputed technical table (same
+    `sim_agg` lets a caller bypass the technical twin: pass a precomputed technical table (same
     schema as `aggregate_simulated_results`: context, sample_name, Technical_cSTD[rad], Technical_R)
     and `df_sim` is not used.
 

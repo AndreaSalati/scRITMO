@@ -5,6 +5,8 @@ Biological phase desynchrony, corrected for the technical (inference) floor.
 ``Scritmo.estimate_phase_desynchrony`` and :meth:`Scritmo.desynchrony` call it.
 """
 
+import warnings
+
 import numpy as np
 
 from scritmo import cSTD, cstd2R, rh
@@ -12,6 +14,62 @@ from ..utils import resolve_device
 from .results import create_results_dataframe, desync_results
 from .deconvolution import aggregate_technical_deconvolution
 from .technical_sim import simulate_cell_populations, simulate_technical_grid
+
+
+SIGMA_TECH_METHODS = ("subtraction", "grid", "deconvolution")
+_DEPRECATED_SIGMA_TECH_METHODS = {"simulation": "subtraction"}
+
+
+def resolve_sigma_tech_method(sigma_tech_method, deconv_form="vector", stacklevel=2):
+    """Map the option names to the current ones and validate them.
+
+    Current names: "subtraction" (default), "grid", and "deconvolution" (the older
+    variance based forms ``deconv_form="exact"`` / ``"taylor"``). Old spellings still
+    work and emit a ``DeprecationWarning``: "simulation" is "subtraction", and
+    "deconvolution" with ``deconv_form="vector"`` is "grid". Results are unchanged.
+
+    Returns
+    -------
+    (method, deconv_form) : (str, str)
+        ``method`` is "subtraction", "grid" or "deconvolution". ``deconv_form`` is
+        "vector" for "grid" and is returned unchanged otherwise.
+
+    ``stacklevel`` is the ``warnings.warn`` level: 2 points at the caller of this
+    function, so pass one more for each wrapper in between.
+    """
+    method = sigma_tech_method
+    if method in _DEPRECATED_SIGMA_TECH_METHODS:
+        new = _DEPRECATED_SIGMA_TECH_METHODS[method]
+        warnings.warn(
+            f"sigma_tech_method={method!r} is deprecated, use {new!r}.",
+            DeprecationWarning, stacklevel=stacklevel,
+        )
+        method = new
+    if method not in SIGMA_TECH_METHODS:
+        raise ValueError(
+            f"Unknown sigma_tech_method {sigma_tech_method!r}. Valid names are "
+            f"{', '.join(repr(m) for m in SIGMA_TECH_METHODS)} "
+            "(the old name 'simulation' is still accepted as 'subtraction'; "
+            "'cramer_rao' and 'harmonic' were removed)."
+        )
+    if method == "deconvolution":
+        if deconv_form not in ("exact", "taylor", "vector"):
+            raise ValueError(
+                f"deconv_form must be 'exact', 'taylor' or 'vector', got {deconv_form!r}"
+            )
+        if deconv_form == "vector":
+            warnings.warn(
+                "sigma_tech_method='deconvolution' with deconv_form='vector' is "
+                "deprecated, use sigma_tech_method='grid'.",
+                DeprecationWarning, stacklevel=stacklevel,
+            )
+            method = "grid"
+    elif method == "grid" and deconv_form != "vector":
+        raise ValueError(
+            "sigma_tech_method='grid' takes no deconv_form; for deconv_form="
+            f"{deconv_form!r} use sigma_tech_method='deconvolution'."
+        )
+    return method, ("vector" if method == "grid" else deconv_form)
 
 
 def estimate_phase_desynchrony(
@@ -44,11 +102,11 @@ def estimate_phase_desynchrony(
     seed_real: int = 42,
     seed_sim: int | None = None,
     # --- Technical floor method ---
-    sigma_tech_method: str = "simulation",
-    # --- Twin grid arguments (deconvolution) ---
+    sigma_tech_method: str = "subtraction",
+    # --- Twin grid arguments ("grid" and "deconvolution") ---
     n_grid: int = 24,
     n_cells_per_gridpoint: int = 1000,
-    # --- Deconvolution floor arguments ---
+    # --- Grid / deconvolution floor arguments ---
     deconv_form: str = "vector",
     return_deconv_diagnostics: bool = False,
     tech_grid=None,
@@ -67,19 +125,28 @@ def estimate_phase_desynchrony(
     The observed spread of per-cell phases within a sample mixes true
     biological desynchrony with technical (estimation) noise. This method
     separates the two by comparing the real spread against a "technical twin"
-    whose only spread is estimation noise, then subtracting in quadrature
-    inside :func:`desync_results`. Available as the model method
+    whose only spread is estimation noise. The default "subtraction" estimator
+    subtracts the twin variance from the data variance inside
+    :func:`desync_results`. Available as the model method
     ``Scritmo.estimate_phase_desynchrony`` (same arguments) and, with explicit
     ``adata.obs`` keys, :meth:`Scritmo.desynchrony`. End to end it:
 
     1. Builds a per-cell results DataFrame from the real data
        (:func:`create_results_dataframe`), optionally filtering cells by posterior
        phase uncertainty (``post_std_threshold``).
-    2. Estimates the technical floor with one of two methods (``sigma_tech_method``):
-         - "simulation": simulate a perfectly-synchronized population
+    2. Estimates the technical floor with one of three methods (``sigma_tech_method``):
+         - "subtraction" (default): simulate a perfectly-synchronized population
            (``kappa=inf``) with this model and re-infer phases, so the recovered
-           spread is purely technical (:func:`simulate_cell_populations`).
-         - "deconvolution": run the same σ=0 twin grid, take f(φ_k) = mean over
+           spread is purely technical (:func:`simulate_cell_populations`). Its
+           variance, evaluated at one phase per group, is subtracted from the data
+           variance.
+         - "grid": run a σ=0 twin at a grid of common phases φ_k, measure the mean
+           resultant ρ(φ_k) = mean of exp(i·post_mode) there, smooth its complex Fourier
+           series by the wrapped normal bump of width σ, and solve per group for the
+           σ_bio that matches the observed resultant (see ``deconv_form="vector"`` below).
+           Needs no ``deconv_form``.
+         - "deconvolution": older variance based variants of "grid", chosen with
+           ``deconv_form``. Run the same σ=0 twin grid, take f(φ_k) = mean over
            runs of cSTD², expand it in its FULL Fourier series (all harmonics up to
            Nyquist, no fit), and solve per group for the σ_bio that makes the
            bump-averaged floor consistent with the data:
@@ -147,17 +214,20 @@ def estimate_phase_desynchrony(
         RNG seed for the real-data bootstrap.
     seed_sim : int, optional
         RNG seed for the simulation.
-    sigma_tech_method : {"simulation", "deconvolution"}, default "simulation"
-        How to estimate the technical floor (see step 2).
+    sigma_tech_method : {"subtraction", "grid", "deconvolution"}, default "subtraction"
+        How to estimate the technical floor (see step 2). The old name "simulation"
+        is accepted as "subtraction", and "deconvolution" with ``deconv_form="vector"``
+        as "grid"; both emit a ``DeprecationWarning`` and give identical results.
     n_grid : int, default 24
-        (deconvolution) Number of common phases on the twin grid, evenly spaced
-        over [0, 2π).
+        ("grid" and "deconvolution") Number of common phases on the twin grid, evenly
+        spaced over [0, 2π).
     n_cells_per_gridpoint : int, default 1000
-        (deconvolution) Twin cells simulated per (grid point, run). For
-        deconvolution, match it to the typical group size n_b: f(φ_k) is a mean of
-        per-run cSTD², so its finite-n bias then matches the data's V_b.
+        ("grid" and "deconvolution") Twin cells simulated per (grid point, run). Match
+        it to the typical group size n_b: f(φ_k) is a mean of per-run cSTD², so its
+        finite-n bias then matches the data's V_b.
     deconv_form : {"exact", "taylor", "vector"}, default "vector"
-        (deconvolution method) "exact" solves T_b(σ) + σ² = V_b on [0, π] with brentq
+        (only used with "deconvolution"; "grid" always uses the vector form and needs
+        no ``deconv_form``) "exact" solves T_b(σ) + σ² = V_b on [0, π] with brentq
         and returns NaN with ``deconv_flag`` ∈ {"below_floor", "no_root",
         "non_monotone"} when σ is not identified (h − V_b must cross zero exactly
         once, with dh/dσ > 0 at the root). "taylor" is the closed form
@@ -180,12 +250,12 @@ def estimate_phase_desynchrony(
         With ``clamp_bio_variance=True`` the "below_floor" groups are set to
         Bio_cSTD = 0 and Technical_cSTD = Data_cSTD (the other flags stay NaN).
     tech_grid : pandas.DataFrame, optional
-        (deconvolution) A precomputed twin grid from
+        ("grid" and "deconvolution") A precomputed twin grid from
         :meth:`simulate_technical_grid` to reuse instead of simulating a new one (e.g.
         one grid shared by several estimators). The grid used is kept on
         ``model.last_tech_grid``.
     return_deconv_diagnostics : bool, default False
-        (deconvolution method) Store {context: {"curve", "per_run", "coef"}} (the grid
+        ("grid" and "deconvolution") Store {context: {"curve", "per_run", "coef"}} (the grid
         f(φ_k), its per-run values and the Fourier coefficients) on
         ``model.deconv_diag``.
     post_std_threshold : float, default inf
@@ -196,7 +266,8 @@ def estimate_phase_desynchrony(
     use_circular_mean : bool, default False
         Use the circular mean (vs. point estimate) for the simulated population means.
     debias_mean : bool, default False
-        Only with ``sigma_tech_method="deconvolution"`` and ``use_circular_mean=True``.
+        Only with ``sigma_tech_method`` "grid" or "deconvolution" and
+        ``use_circular_mean=True``.
         Maps the circular mean of each group back through the mean direction of the
         σ = 0 grid (:func:`scritmo.ml.desync.deconvolution.debias_phase`), so μ_b is the
         phase whose synchronized twin has the observed mean direction. Removes the shift of
@@ -217,7 +288,7 @@ def estimate_phase_desynchrony(
         technical floor removed (biological desynchrony, plus the intermediate
         real / technical dispersion columns). Also stores the intermediate
         real-data frame on ``model.result_df``. With
-        ``sigma_tech_method="deconvolution"`` it also carries the ``deconv_*``
+        ``sigma_tech_method`` "grid" or "deconvolution" it also carries the ``deconv_*``
         columns and ``Technical_cSTD_floor`` (see ``deconv_form``); ``Bio_cSTD`` is
         then σ̂_b in hours (NaN where not identified).
     """
@@ -230,21 +301,16 @@ def estimate_phase_desynchrony(
             "circle; it is not supported for models fit with phase_range."
         )
 
-    if sigma_tech_method not in ("simulation", "deconvolution"):
+    # old names ("simulation", "deconvolution"+"vector") map to the new ones here;
+    # stacklevel=3 makes the DeprecationWarning point at the caller of this function
+    sigma_tech_method, deconv_form = resolve_sigma_tech_method(
+        sigma_tech_method, deconv_form, stacklevel=3
+    )
+    use_grid = sigma_tech_method in ("grid", "deconvolution")
+    if debias_mean and not (use_grid and use_circular_mean):
         raise ValueError(
-            f"Unknown sigma_tech_method '{sigma_tech_method}'. Use 'simulation' "
-            "or 'deconvolution' ('cramer_rao' and 'harmonic' were removed)."
-        )
-    if debias_mean and not (sigma_tech_method == "deconvolution" and use_circular_mean):
-        raise ValueError(
-            "debias_mean=True needs sigma_tech_method='deconvolution' (it inverts the "
-            "mean direction of the twin grid) and use_circular_mean=True"
-        )
-    if sigma_tech_method == "deconvolution" and deconv_form not in (
-        "exact", "taylor", "vector"
-    ):
-        raise ValueError(
-            f"deconv_form must be 'exact', 'taylor' or 'vector', got {deconv_form!r}"
+            "debias_mean=True needs sigma_tech_method='grid' (or 'deconvolution'; it "
+            "inverts the mean direction of the twin grid) and use_circular_mean=True"
         )
 
     if context_col is None:
@@ -288,7 +354,7 @@ def estimate_phase_desynchrony(
             )
 
     deconv_table = None
-    if sigma_tech_method == "deconvolution":
+    if use_grid:
         # the sigma=0 twin grid of common phases; reused as-is when the caller passes a
         # precomputed one (e.g. one grid shared by deconv_form="exact" and "taylor")
         if tech_grid is not None:
@@ -310,9 +376,9 @@ def estimate_phase_desynchrony(
             )
         model.last_tech_grid = df_grid
 
-    if sigma_tech_method == "deconvolution":
-        # 2a'''. Deconvolved floor: full Fourier series of f(phi_k), then solve
-        # V_b = T_b(sigma) + sigma^2 per group (see scritmo.ml.deconvolution).
+    if use_grid:
+        # 2a'''. Grid / deconvolved floor: Fourier series of the twin grid, then solve
+        # for sigma per group (see scritmo.ml.desync.deconvolution).
         _gcols = group_cols if group_cols is not None else ["context", "sample_name"]
         deconv_table, deconv_diag = aggregate_technical_deconvolution(
             df_grid,
@@ -333,7 +399,8 @@ def estimate_phase_desynchrony(
         tech_agg = deconv_table[_gcols + ["Technical_cSTD", "Technical_R"]]
         df_sim = None
         print(
-            f"  deconvolution floor ({deconv_form}): flags "
+            f"  {'grid' if sigma_tech_method == 'grid' else f'deconvolution ({deconv_form})'}"
+            " floor: flags "
             f"{deconv_table['deconv_flag'].value_counts().to_dict()}"
         )
     else:
@@ -388,7 +455,7 @@ def estimate_phase_desynchrony(
 
 
 def _attach_deconvolution(df_final, deconv_table, group_cols, clamp_bio_variance):
-    """Merge the deconvolution columns into the desync table and set Bio_cSTD = σ̂.
+    """Merge the grid / deconvolution columns into the desync table and set Bio_cSTD = σ̂.
 
     `desync_results` already computed Bio from Data and the implied Technical term, which
     equals σ̂ up to the root tolerance; it is overwritten with σ̂ itself so the reported

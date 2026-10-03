@@ -7,7 +7,8 @@ Inside one group b (one population / sample), the law of total variance is exact
 
 where V_b is the observed spread of the inferred phases (cSTD², rad²) and f(θ) is the
 technical variance of a perfectly synchronized population at true phase θ. The
-per-group "twin" (Eq. 14, ``sigma_tech_method="simulation"``) reads f at ONE point,
+per-group "twin" (Eq. 14, the "subtraction" estimator, ``sigma_tech_method="subtraction"``)
+reads f at ONE point,
 
     σ̂²_bio,b = V_b − f(μ_b),
 
@@ -52,7 +53,8 @@ This module removes A1 by deconvolving the bump explicitly:
    :func:`scritmo.ml.analysis_utils.desync_means` (mean V − mean Tech) equals the
    weighted mean of σ̂²_b over the identified groups.
 
-VECTOR form (``deconv_form="vector"``) — the forms above model only the smoothing of f
+VECTOR form (the "grid" estimator, ``sigma_tech_method="grid"``, which is the same as
+``sigma_tech_method="deconvolution"`` with ``deconv_form="vector"``) — the forms above model only the smoothing of f
 (approximation A1). The twin's real per-group error also contains the attractor-bias terms
 (A2: σ²(2β'+β'²), β = m(θ) − θ), the placement term (A3) and the circular log-Jensen term
 (−¼ f'² σ²). All of them are exact consequences of ONE first-moment identity (law of total
@@ -415,7 +417,7 @@ def _vector_L_and_dL(mu, cc, n):
 
 
 def solve_vector(R2, n, mu, cc, sigma_max=np.pi, n_scan=4001):
-    """Vector-form deconvolution for one group:
+    """Grid (vector form) estimator for one group (alias :func:`solve_grid`):
     solve |ρ̄(σ)|² + (1 − |ρ̄(σ)|²)/n = R̄² for σ ≥ 0.
 
     Parameters
@@ -468,7 +470,8 @@ def solve_vector(R2, n, mu, cc, sigma_max=np.pi, n_scan=4001):
 # VECTOR form, ONE σ shared by all groups
 # ---------------------------------------------------------------------------
 def solve_vector_shared(R2, n, mus, cc, weights=None, sigma_max=np.pi, n_scan=4001):
-    """One σ for all groups, from the sum of the per-group equations of :func:`solve_vector`:
+    """One σ for all groups (alias :func:`solve_grid_shared`), from the sum of the per-group
+    equations of :func:`solve_vector`:
 
         G(σ) = Σ_b a_b [ L_b(σ) − R̄²_b ] = 0,   L_b(σ) = |ρ̄_b(σ)|² + (1 − |ρ̄_b(σ)|²)/n_b,
 
@@ -527,6 +530,11 @@ def solve_vector_shared(R2, n, mus, cc, weights=None, sigma_max=np.pi, n_scan=40
         return out
     out.update(sigma=float(root), flag="ok")
     return out
+
+
+# "grid" is the paper name of the vector form estimator; the old names stay importable
+solve_grid = solve_vector
+solve_grid_shared = solve_vector_shared
 
 
 def grid_resultant_curve(df_grid, post_estimator="post_mode"):
@@ -626,7 +634,7 @@ def aggregate_technical_deconvolution(
          inferred mean by the attractor bias; groups where it fails keep the circular mean
          (``deconv_debias_ok`` False).
       4. Solve per row with :func:`solve_exact`, :func:`solve_taylor` or, for
-         ``deconv_form="vector"``, :func:`solve_vector` on the complex resultant of the grid
+         ``deconv_form="vector"`` (the "grid" estimator), :func:`solve_vector` on the complex resultant of the grid
          (R̄² = exp(−Data_cSTD²), n = group_size; see the module docstring).
 
     Returns

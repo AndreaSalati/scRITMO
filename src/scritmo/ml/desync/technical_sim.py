@@ -314,7 +314,7 @@ def simulate_technical_grid(
     seed_sim: int | None = None,
     posterior_cell_chunk: int | None = None,
 ):
-    """Twin-population grid for the phase-resolved (deconvolution) technical floor.
+    """Twin-population grid for the phase-resolved ("grid" and "deconvolution") technical floor.
 
     σ_tech is itself phase-dependent (large near the Bmal1 trough, small at high
     expression). This builds a perfectly-synchronized ("twin") population at each of

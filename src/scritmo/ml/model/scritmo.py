@@ -45,6 +45,7 @@ from ..desync.results import create_results_dataframe
 from ..desync.technical_sim import simulate_cell_populations, simulate_technical_grid
 from ..desync.estimate import (
     estimate_phase_desynchrony as _estimate_phase_desynchrony,
+    resolve_sigma_tech_method as _resolve_sigma_tech_method,
     _attach_deconvolution,
 )
 from ..tools._compat import NullModelMixin, GenomeFitMixin
@@ -733,7 +734,7 @@ class Scritmo(nn.Module, UnsplicedMixin):
         ext_time_key,
         context_key=None,
         ext_phase=None,
-        method="simulation",
+        method="subtraction",
         layer="spliced",
         **kwargs,
     ):
@@ -750,14 +751,20 @@ class Scritmo(nn.Module, UnsplicedMixin):
             context_key: Optional ``adata.obs`` column grouping samples (e.g.
                 celltype or condition). None puts every cell in one group.
             ext_phase: Optional reference phase per cell (radians) to align to.
-            method: Technical floor, "simulation" or "deconvolution"
-                (``sigma_tech_method``).
+            method: Technical floor estimator, "subtraction" (default), "grid" or
+                "deconvolution" (``sigma_tech_method``). The old name "simulation"
+                is accepted as "subtraction", and "deconvolution" with
+                ``deconv_form="vector"`` as "grid", with a ``DeprecationWarning``.
             layer: Count layer.
             **kwargs: Any other argument of :func:`scritmo.ml.desync.estimate_phase_desynchrony`.
 
         Returns:
             DataFrame with one row per group (see :meth:`estimate_phase_desynchrony`).
         """
+        # map old names here so the DeprecationWarning points at the caller of desynchrony
+        method, _ = _resolve_sigma_tech_method(
+            method, kwargs.get("deconv_form", "vector"), stacklevel=3
+        )
         added = context_key is None and "context" not in adata.obs
         try:
             return _estimate_phase_desynchrony(
@@ -1253,7 +1260,7 @@ class Scritmo(nn.Module, UnsplicedMixin):
         seed_sim: int | None = None,
         posterior_cell_chunk=None,
     ):
-        """Wrapper around the simulate_technical_grid function (deconvolution σ_tech floor).
+        """Wrapper around the simulate_technical_grid function (twin grid for the "grid" σ_tech floor).
 
         ``device`` is resolved with :func:`scritmo.ml.utils.resolve_device`.
         """
