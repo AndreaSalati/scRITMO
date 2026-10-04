@@ -19,4 +19,9 @@ from .results import (
 from .deconvolution import aggregate_technical_deconvolution
 from .technical_sim import simulate_cell_populations, simulate_technical_grid
 from .estimate import estimate_phase_desynchrony, resolve_sigma_tech_method
-from .hierarchical import solve_hierarchical, solve_hierarchical_shared
+from .hierarchical import (
+    aggregate_hierarchical,
+    cell_posteriors,
+    solve_hierarchical,
+    solve_hierarchical_shared,
+)

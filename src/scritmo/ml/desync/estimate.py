@@ -13,10 +13,11 @@ from scritmo import cSTD, cstd2R, rh
 from ..utils import resolve_device
 from .results import create_results_dataframe, desync_results
 from .deconvolution import aggregate_technical_deconvolution
+from .hierarchical import aggregate_hierarchical, cell_posteriors
 from .technical_sim import simulate_cell_populations, simulate_technical_grid
 
 
-SIGMA_TECH_METHODS = ("subtraction", "grid", "deconvolution")
+SIGMA_TECH_METHODS = ("subtraction", "grid", "deconvolution", "hierarchical")
 _DEPRECATED_SIGMA_TECH_METHODS = {"simulation": "subtraction"}
 
 
@@ -110,6 +111,9 @@ def estimate_phase_desynchrony(
     deconv_form: str = "vector",
     return_deconv_diagnostics: bool = False,
     tech_grid=None,
+    # --- Hierarchical estimator ("hierarchical") ---
+    n_theta_hier: int = 240,
+    hier_shared: bool = False,
     # --- Cell filtering / weighting ---
     post_std_threshold: float = np.inf,
     weight_by_post_std: bool = False,
@@ -134,7 +138,7 @@ def estimate_phase_desynchrony(
     1. Builds a per-cell results DataFrame from the real data
        (:func:`create_results_dataframe`), optionally filtering cells by posterior
        phase uncertainty (``post_std_threshold``).
-    2. Estimates the technical floor with one of three methods (``sigma_tech_method``):
+    2. Estimates the technical floor with one of four methods (``sigma_tech_method``):
          - "subtraction" (default): simulate a perfectly-synchronized population
            (``kappa=inf``) with this model and re-infer phases, so the recovered
            spread is purely technical (:func:`simulate_cell_populations`). Its
@@ -145,6 +149,12 @@ def estimate_phase_desynchrony(
            series by the wrapped normal bump of width σ, and solve per group for the
            σ_bio that matches the observed resultant (see ``deconv_form="vector"`` below).
            Needs no ``deconv_form``.
+         - "hierarchical": needs no twin. Fits a wrapped normal population WN(mu_b, sigma_b)
+           to the full per cell phase posteriors of each group, maximizing
+           sum_c log int l_c(theta) WN(theta; mu_b, sigma) dtheta over (mu_b, sigma)
+           (``Bio_cSTD`` = sigma_b, with a profile likelihood 95% interval). The technical
+           noise is the width of each cell's likelihood, so no simulation is run. See
+           :mod:`scritmo.ml.desync.hierarchical`.
          - "deconvolution": older variance based variants of "grid", chosen with
            ``deconv_form``. Run the same σ=0 twin grid, take f(φ_k) = mean over
            runs of cSTD², expand it in its FULL Fourier series (all harmonics up to
@@ -214,7 +224,7 @@ def estimate_phase_desynchrony(
         RNG seed for the real-data bootstrap.
     seed_sim : int, optional
         RNG seed for the simulation.
-    sigma_tech_method : {"subtraction", "grid", "deconvolution"}, default "subtraction"
+    sigma_tech_method : {"subtraction", "grid", "deconvolution", "hierarchical"}, default "subtraction"
         How to estimate the technical floor (see step 2). The old name "simulation"
         is accepted as "subtraction", and "deconvolution" with ``deconv_form="vector"``
         as "grid"; both emit a ``DeprecationWarning`` and give identical results.
@@ -249,6 +259,13 @@ def estimate_phase_desynchrony(
         identified groups (the unidentified ones carry NaN and are dropped/counted).
         With ``clamp_bio_variance=True`` the "below_floor" groups are set to
         Bio_cSTD = 0 and Technical_cSTD = Data_cSTD (the other flags stay NaN).
+    n_theta_hier : int, default 240
+        ("hierarchical") Phase grid of the per cell posteriors (240 is 0.1 h). The grid used
+        for the fit is too coarse for sigma_bio of about 1 h.
+    hier_shared : bool, default False
+        ("hierarchical") Also fit ONE sigma per level of the first grouping column (each
+        group keeps its own free mu_b) and add it as ``hier_shared_sigma_h`` with its
+        interval. For designs where sigma_bio is the same in every sample.
     tech_grid : pandas.DataFrame, optional
         ("grid" and "deconvolution") A precomputed twin grid from
         :meth:`simulate_technical_grid` to reuse instead of simulating a new one (e.g.
@@ -307,6 +324,11 @@ def estimate_phase_desynchrony(
         sigma_tech_method, deconv_form, stacklevel=3
     )
     use_grid = sigma_tech_method in ("grid", "deconvolution")
+    use_hier = sigma_tech_method == "hierarchical"
+    if use_hier and (debias_mean or use_circular_mean):
+        warnings.warn(
+            "'hierarchical' fits the group phase mu_b freely: use_circular_mean and "
+            "debias_mean are ignored.", UserWarning, stacklevel=2)
     if debias_mean and not (use_grid and use_circular_mean):
         raise ValueError(
             "debias_mean=True needs sigma_tech_method='grid' (or 'deconvolution'; it "
@@ -340,8 +362,10 @@ def estimate_phase_desynchrony(
     model.result_df = df_real
 
     # 1b. Filter cells by posterior uncertainty
+    cell_mask = None
     if post_std_threshold < np.inf and "post_std_c" in df_real.columns:
         mask = df_real["post_std_c"] <= post_std_threshold
+        cell_mask = mask.values
         n_before = len(df_real)
         df_real = df_real[mask].copy()
         print(
@@ -354,6 +378,22 @@ def estimate_phase_desynchrony(
             )
 
     deconv_table = None
+    hier_table = None
+    if use_hier:
+        # 2a-h. Hierarchical: full per cell posteriors on a fine grid, no twin
+        _gcols = group_cols if group_cols is not None else ["context", "sample_name"]
+        post, phi_h = cell_posteriors(
+            model, adata, layer=layer, n_theta=n_theta_hier,
+            library_size_vec=library_size_vec, cell_chunk=posterior_cell_chunk)
+        hier_table = aggregate_hierarchical(
+            post, phi_h, df_real, _gcols, shared=hier_shared, cell_mask=cell_mask)
+        # placeholder technical table: Technical_cSTD is filled in from Data and sigma below
+        tech_agg = hier_table[_gcols].copy()
+        tech_agg["Technical_cSTD"] = np.nan
+        tech_agg["Technical_R"] = np.nan
+        df_sim = None
+        print("  hierarchical: flags "
+              f"{hier_table['hier_flag'].value_counts().to_dict()}")
     if use_grid:
         # the sigma=0 twin grid of common phases; reused as-is when the caller passes a
         # precomputed one (e.g. one grid shared by deconv_form="exact" and "taylor")
@@ -403,7 +443,7 @@ def estimate_phase_desynchrony(
             " floor: flags "
             f"{deconv_table['deconv_flag'].value_counts().to_dict()}"
         )
-    else:
+    elif not use_hier:
         # 2a. Simulate the technical twin (point estimates only)
         df_sim = simulate_cell_populations(
             cmodel=model,
@@ -441,6 +481,11 @@ def estimate_phase_desynchrony(
         weight_col="post_std_c" if weight_by_post_std else None,
         clamp_bio_variance=clamp_bio_variance,
     )
+
+    if hier_table is not None:
+        df_final = _attach_hierarchical(
+            df_final, hier_table,
+            group_cols if group_cols is not None else ["context", "sample_name"])
 
     if deconv_table is not None:
         df_final = _attach_deconvolution(
@@ -488,3 +533,29 @@ def _attach_deconvolution(df_final, deconv_table, group_cols, clamp_bio_variance
     out["deconv_sigma_h"] = out["deconv_sigma"] * rh
     return out
 
+
+
+def _attach_hierarchical(df_final, hier_table, group_cols):
+    """Merge the hierarchical columns into the desync table and set Bio_cSTD = sigma_hat.
+
+    Bio_cSTD is sigma_hat in hours (0 where the maximum is at sigma = 0, NaN where the fit
+    failed). Technical_cSTD is the IMPLIED term sqrt(Data_cSTD^2 - sigma_hat^2) (NaN if
+    sigma_hat > Data_cSTD), so Data^2 = Technical^2 + Bio^2 per group, as for "grid".
+    """
+    dt = hier_table.copy()
+    out = df_final.copy()
+    for col in group_cols:
+        dt[col] = dt[col].astype(str)
+        out[col] = out[col].astype(str)
+    out = out.merge(dt, on=group_cols, how="left")
+    for c in ("sigma", "mu", "ci_lo", "ci_hi"):
+        out[f"hier_{c}_h"] = out[f"hier_{c}"] * rh
+    if "hier_shared_sigma" in out.columns:
+        for c in ("sigma", "ci_lo", "ci_hi"):
+            out[f"hier_shared_{c}_h"] = out[f"hier_shared_{c}"] * rh
+    out["Bio_cSTD"] = out["hier_sigma_h"]
+    tech2 = out["Data_cSTD"] ** 2 - out["Bio_cSTD"] ** 2
+    out["Technical_cSTD"] = np.sqrt(tech2.where(tech2 >= 0))
+    out["Bio_R"] = cstd2R(out["Bio_cSTD"] / rh)
+    out["Technical_R"] = cstd2R(out["Technical_cSTD"] / rh)
+    return out
