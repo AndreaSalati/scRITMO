@@ -18,6 +18,9 @@ For sigma smaller than the grid spacing the weights collapse to a delta on a gri
 from functools import lru_cache
 
 import numpy as np
+import pandas as pd
+
+from scritmo import rh
 
 CHI2_1_95 = 1.92  # half of the chi2_1 95% quantile (3.84)
 
@@ -126,3 +129,72 @@ def solve_hierarchical_shared(posts, phi_x, sigma_max=np.pi, n_sigma=200, floor=
         sig, LL = loglik_surface(p, phi, sigma_max, n_sigma, floor)
         prof = prof + LL.max(1)
     return _summarize(sig, prof, None, sigma_max, phi)
+
+
+def cell_posteriors(model, adata, layer="spliced", n_theta=240, library_size_vec=None,
+                    cell_chunk=None):
+    """Normalized per cell posteriors on a fine phase grid: (n_theta, n_cells), and the grid.
+
+    The posterior is the likelihood (``get_phase_posteriors`` adds no phase prior). The grid
+    is finer than the one used for the fit, since sigma_bio of about 1 h needs well under 1 h
+    spacing. ``library_size_vec`` must be the genome wide library size, as for the fit;
+    None uses ``model.counts`` (the fit's own size factor), never the sum over the modelled
+    genes.
+    """
+    import torch
+
+    dev = model.m_g.device
+    X = adata[:, list(model.genes)].layers[layer]
+    X = X.toarray() if hasattr(X, "toarray") else np.asarray(X)
+    y = torch.tensor(X, dtype=torch.float32, device=dev).unsqueeze(0)
+    if library_size_vec is None:
+        counts = model.counts
+        if counts.shape[0] != adata.n_obs:
+            raise ValueError(
+                "model.counts does not match adata; pass library_size_vec (the genome wide "
+                "library size per cell)."
+            )
+        counts = counts.to(dev)
+    else:
+        counts = torch.tensor(np.asarray(library_size_vec, dtype=np.float32).reshape(-1, 1),
+                              device=dev)
+    post = model.get_phase_posteriors(y, counts=counts, n_theta=n_theta, cell_chunk=cell_chunk)
+    return np.asarray(post), np.arange(n_theta) * 2 * np.pi / n_theta
+
+
+def aggregate_hierarchical(post, phi, df_real, group_cols, shared=False, cell_mask=None,
+                           sigma_max=np.pi, n_sigma=200):
+    """Per group (``group_cols``) hierarchical sigma_bio from the cell posteriors.
+
+    post : (n_theta, n_cells) in the cell order of the AnnData; ``df_real`` is the per cell
+    table in that order (after the optional ``cell_mask``, a boolean over the AnnData cells,
+    that dropped cells). Returns one row per group with ``hier_sigma`` (rad), ``hier_mu``
+    (rad), ``hier_ci_lo``/``hier_ci_hi`` (rad), ``hier_flag``, ``hier_loglik``, ``hier_n``.
+    With ``shared=True`` the rows also carry ``hier_shared_sigma`` / ``_ci_lo`` / ``_ci_hi``
+    (rad): one sigma per level of ``group_cols[0]`` (e.g. per context), each group keeping a
+    free mu_b.
+    """
+    if cell_mask is not None:
+        post = post[:, np.asarray(cell_mask, dtype=bool)]
+    if post.shape[1] != len(df_real):
+        raise ValueError("posteriors and df_real have different numbers of cells")
+    keys = df_real[group_cols].astype(str).reset_index(drop=True)
+    rows = []
+    for key, idx in keys.groupby(group_cols, sort=False).groups.items():
+        key = key if isinstance(key, tuple) else (key,)
+        e = solve_hierarchical(post[:, np.asarray(idx)], phi, sigma_max, n_sigma)
+        rows.append(dict(zip(group_cols, key), hier_sigma=e["sigma"], hier_mu=e["mu"],
+                         hier_ci_lo=e["ci_lo"], hier_ci_hi=e["ci_hi"], hier_flag=e["flag"],
+                         hier_loglik=e["loglik_max"], hier_n=len(idx)))
+    out = pd.DataFrame(rows)
+    if shared:
+        sh = {}
+        for lvl, idxs in keys.groupby(group_cols[0], sort=False).groups.items():
+            sub = keys.loc[idxs]
+            posts = [post[:, np.asarray(ix)]
+                     for ix in sub.groupby(group_cols, sort=False).groups.values()]
+            sh[lvl] = solve_hierarchical_shared(posts, phi, sigma_max, n_sigma)
+        for c, k in (("hier_shared_sigma", "sigma"), ("hier_shared_ci_lo", "ci_lo"),
+                     ("hier_shared_ci_hi", "ci_hi")):
+            out[c] = out[group_cols[0]].map(lambda g, k=k: sh[g][k])
+    return out

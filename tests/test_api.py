@@ -135,6 +135,31 @@ def test_desynchrony_leaves_obs_unchanged():
     assert len(df) == adata.obs["sample_name"].nunique()
 
 
+def test_desynchrony_hierarchical_method():
+    model, adata, par, theta, L = _fit()
+    cols = list(adata.obs.columns)
+    df = model.desynchrony(
+        adata, sample_key="sample_name", ext_time_key="ZTmod", ext_phase=theta,
+        method="hierarchical", device="cpu", library_size_vec=L, hier_shared=True,
+        n_theta_hier=120,
+    )
+    assert list(adata.obs.columns) == cols
+    assert len(df) == adata.obs["sample_name"].nunique()
+    assert {"Data_cSTD", "Technical_cSTD", "Bio_cSTD", "hier_sigma_h", "hier_ci_lo_h",
+            "hier_ci_hi_h", "hier_flag", "hier_shared_sigma_h"} <= set(df.columns)
+    ok = df["Bio_cSTD"].notna()
+    assert ok.all() and (df["hier_ci_lo_h"] <= df["Bio_cSTD"] + 1e-9).all()
+    assert (df["Bio_cSTD"] <= df["hier_ci_hi_h"] + 1e-9).all()
+    # same estimate as the standalone solver on the same posteriors
+    from scritmo.ml.desync import cell_posteriors, solve_hierarchical
+    post, phi = cell_posteriors(model, adata, n_theta=120, library_size_vec=L)
+    z = (adata.obs["sample_name"] == df["sample_name"].iloc[0]).values
+    e = solve_hierarchical(post[:, z], phi)
+    assert np.isclose(df["Bio_cSTD"].iloc[0], e["sigma"] * sr.rh)
+    with pytest.raises(ValueError):  # size factor that does not match the cells
+        cell_posteriors(model, adata[:10].copy(), n_theta=24)
+
+
 def test_legacy_constructor_builds_immediately():
     adata, par, theta, L = _toy()
     data_c, mp = assemble_mp(adata, par, labels=None, counts=L, device="cpu")

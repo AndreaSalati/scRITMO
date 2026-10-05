@@ -751,7 +751,7 @@ class Scritmo(nn.Module, UnsplicedMixin):
             context_key: Optional ``adata.obs`` column grouping samples (e.g.
                 celltype or condition). None puts every cell in one group.
             ext_phase: Optional reference phase per cell (radians) to align to.
-            method: Technical floor estimator, "subtraction" (default), "grid" or
+            method: Technical floor estimator, "subtraction" (default), "grid", "hierarchical" or
                 "deconvolution" (``sigma_tech_method``). The old name "simulation"
                 is accepted as "subtraction", and "deconvolution" with
                 ``deconv_form="vector"`` as "grid", with a ``DeprecationWarning``.
